@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+
+data/feasibility/*.parquet
+data/feasibility/*.csv
+
+.vscode/
+.DS_Stor
+Test_Date
+
