@@ -1,0 +1,29 @@
+# Data processing
+polars
+pandas
+pyarrow
+
+# Lakehouse / Iceberg / MinIO
+pyiceberg[s3fs]
+boto3
+s3fs
+
+# Data quality
+great-expectations
+
+# Data sources
+vnstock
+holidays
+requests
+
+# Serving database
+clickhouse-connect
+
+# Configuration and reliability
+python-dotenv
+tenacity
+pydantic
+
+# Development / testing
+pytest
+ipykernel
