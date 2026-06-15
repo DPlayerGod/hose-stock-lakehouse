@@ -1,12 +1,11 @@
 """Silver layer for HOSE symbol metadata."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import polars as pl
 
 from stock_lakehouse.quality.gold import validate_dim_symbol
 from stock_lakehouse.quality.ohlcv import ValidationResult
+from stock_lakehouse.utils.dates import now_utc
 
 
 SILVER_SYMBOLS_COLUMNS = (
@@ -55,7 +54,7 @@ def build_silver_symbols(bronze_df: pl.DataFrame) -> pl.DataFrame:
             pl.col("listing_date").cast(pl.Date, strict=False),
             pl.col("exchange_code").cast(pl.Utf8, strict=False).fill_null("HOSE"),
             pl.col("listed_status").cast(pl.Utf8, strict=False).fill_null("LISTED"),
-            pl.lit(datetime.now(timezone.utc)).alias("updated_at"),
+            pl.lit(now_utc()).alias("updated_at"),
         )
         .sort("symbol", "ingested_at")
         .unique(subset=["symbol"], keep="last", maintain_order=True)

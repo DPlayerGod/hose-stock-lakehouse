@@ -13,10 +13,14 @@ flaky step that would benefit from independent retries.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
+import pendulum
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+
+# ICT (UTC+7, Đông Nam Á) — dùng cho start_date timezone-aware.
+LOCAL_TZ = pendulum.timezone("Asia/Ho_Chi_Minh")
 
 START_DATE = "2020-01-01"
 END_DATE = "2030-12-31"
@@ -44,7 +48,7 @@ with DAG(
     default_args=default_args,
     description="One-time dim_date generation (2020-2030): build → validate → Iceberg → ClickHouse",
     schedule_interval=None,  # Manual trigger only — run exactly once
-    start_date=datetime(2024, 1, 1),
+    start_date=pendulum.datetime(2024, 1, 1, tz=LOCAL_TZ),
     catchup=False,
     max_active_runs=1,
     tags=["lakehouse", "dim_date", "one-time"],

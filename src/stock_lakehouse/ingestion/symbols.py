@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from uuid import uuid4
 
 import polars as pl
 
 from stock_lakehouse.config import SYMBOLS
+from stock_lakehouse.utils.dates import now_utc
 
 
 SymbolFetcher = Callable[[], object]
@@ -96,7 +97,7 @@ def extract_hose_symbols(
     if metadata_fetcher is not None:
         df = _enrich_with_metadata(df, metadata_fetcher)
 
-    ingested_at = datetime.now(timezone.utc)
+    ingested_at = now_utc()
     return df.with_columns(
         pl.lit("VCI").alias("source"),
         pl.lit(batch_id).alias("batch_id"),

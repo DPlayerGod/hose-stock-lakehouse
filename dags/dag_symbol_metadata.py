@@ -7,10 +7,14 @@ Flow (overview approach — small table, full overwrite each run):
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
+import pendulum
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+
+# ICT (UTC+7, Đông Nam Á) — cron schedule_interval được hiểu theo múi giờ này.
+LOCAL_TZ = pendulum.timezone("Asia/Ho_Chi_Minh")
 
 default_args = {
     "owner": "lakehouse",
@@ -130,8 +134,8 @@ with DAG(
     dag_id="dag_symbol_metadata",
     default_args=default_args,
     description="HOSE symbol metadata: Extract → Bronze → Silver → dim_symbol → ClickHouse",
-    schedule_interval="0 17 * * 0",
-    start_date=datetime(2024, 1, 1),
+    schedule_interval="0 17 * * 0",  # 17:00 ICT (UTC+7) Chủ nhật hàng tuần
+    start_date=pendulum.datetime(2024, 1, 1, tz=LOCAL_TZ),
     catchup=False,
     max_active_runs=1,
     tags=["lakehouse", "symbols", "metadata"],

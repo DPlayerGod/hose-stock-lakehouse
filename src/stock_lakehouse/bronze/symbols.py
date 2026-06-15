@@ -1,8 +1,6 @@
 """Bronze layer for HOSE symbol metadata."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import polars as pl
 
 from stock_lakehouse.quality.ohlcv import ValidationResult

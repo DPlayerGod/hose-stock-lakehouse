@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import polars as pl
 
 from stock_lakehouse.quality.gold import validate_dim_symbol
+from stock_lakehouse.utils.dates import now_utc
 
 
 DIM_SYMBOL_COLUMNS = (
@@ -22,7 +21,7 @@ DIM_SYMBOL_COLUMNS = (
 
 def build_dim_symbol(symbols_df: pl.DataFrame, existing_dim: pl.DataFrame | None = None) -> pl.DataFrame:
     latest = _normalize_latest_symbols(symbols_df)
-    now = datetime.now(timezone.utc)
+    now = now_utc()
 
     if existing_dim is None or existing_dim.is_empty():
         result = (
