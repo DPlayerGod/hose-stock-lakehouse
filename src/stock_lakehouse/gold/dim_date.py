@@ -46,7 +46,7 @@ def build_dim_date(start_date: str | date, end_date: str | date) -> pl.DataFrame
                 "cal_year": current.year,
                 "is_weekend": is_weekend,
                 "event_name": event_name,
-                "event_type": "HOLIDAY" if event_name else None,
+                "event_type": _classify_event_type(event_name),
                 "is_day_off": is_weekend or event_name is not None,
             }
         )
@@ -55,6 +55,18 @@ def build_dim_date(start_date: str | date, end_date: str | date) -> pl.DataFrame
     dim_date = pl.DataFrame(rows).select(DIM_DATE_COLUMNS)
     validate_dim_date(dim_date).raise_for_errors()
     return dim_date
+
+
+_COMPENSATION_KEYWORDS = ("nghỉ bù", "hoán đổi", "thay cho")
+
+
+def _classify_event_type(event_name: str | None) -> str | None:
+    if event_name is None:
+        return None
+    name = event_name.lower()
+    if any(keyword in name for keyword in _COMPENSATION_KEYWORDS):
+        return "COMPENSATION"
+    return "HOLIDAY"
 
 
 def _to_date(value: str | date) -> date:
