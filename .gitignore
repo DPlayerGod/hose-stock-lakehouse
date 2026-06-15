@@ -6,8 +6,15 @@ __pycache__/
 
 data/feasibility/*.parquet
 data/feasibility/*.csv
+data/test_outputs/
+data/.pytest_tmp/
+.pytest_tmp/
+pytest_tmp/
+data/pytest-cache-files-*/
+logs/
 
 .vscode/
 .DS_Stor
 Test_Date
 
+flow_batch.md

@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider"
+markers = [
+    "integration: requires Docker Compose services (MinIO, Iceberg REST, etc.)",
+]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.13"
+extraPaths = ["src"]
