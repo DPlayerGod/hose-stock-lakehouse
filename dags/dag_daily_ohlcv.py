@@ -95,6 +95,8 @@ def task_validate_staging(**context):
     from stock_lakehouse.staging.writer import read_staging_parquet
 
     config = _get_config()
+    ds = context["ds"]
+    batch_id = context["ti"].xcom_pull(task_ids="extract_ohlcv", key="batch_id")
     staging_uri = context["ti"].xcom_pull(task_ids="write_staging", key="staging_uri")
     df = read_staging_parquet(staging_uri, config.minio)
 
@@ -102,7 +104,7 @@ def task_validate_staging(**context):
         raise ValueError(f"Staging file is empty: {staging_uri}")
 
     result = validate_bronze_ohlcv(df)
-    result.raise_for_errors()
+    result.quarantine_and_raise(df, domain="staging_ohlcv", processing_date=ds, batch_id=batch_id, config=config.minio)
     context["ti"].xcom_push(key="staging_rows", value=df.height)
 
 
@@ -115,7 +117,6 @@ def task_write_bronze(**context):
     from stock_lakehouse.iceberg.writer import ensure_table, write_dataframe
     from stock_lakehouse.staging.writer import read_staging_parquet
     from stock_lakehouse.utils.dates import format_date
-    import polars as pl
 
     ds = context["ds"]
     config = _get_config()
@@ -127,7 +128,7 @@ def task_write_bronze(**context):
     ns = config.iceberg.namespace
 
     existing = try_read_table(catalog, f"{ns}.bronze_hose_ohlcv_daily")
-    bronze_all = _replace_by_date(existing, bronze_day, "time", format_date(ds))
+    bronze_all = _replace_by_date(existing, bronze_day, date_column="time", processing_date=format_date(ds))
 
     write_dataframe(
         ensure_table(catalog, f"{ns}.bronze_hose_ohlcv_daily", BRONZE_OHLCV_SCHEMA, BRONZE_OHLCV_PARTITION_SPEC),
@@ -147,7 +148,6 @@ def task_transform_silver(**context):
     from stock_lakehouse.silver.ohlcv import build_silver_ohlcv
     from stock_lakehouse.staging.writer import read_staging_parquet
     from stock_lakehouse.utils.dates import format_date
-    import polars as pl
 
     ds = context["ds"]
     config = _get_config()
@@ -161,7 +161,7 @@ def task_transform_silver(**context):
     ns = config.iceberg.namespace
 
     existing = try_read_table(catalog, f"{ns}.silver_hose_ohlcv_daily")
-    silver_all = _replace_by_date(existing, silver_day, "trading_date", format_date(ds))
+    silver_all = _replace_by_date(existing, silver_day, date_column="trading_date", processing_date=format_date(ds))
 
     write_dataframe(
         ensure_table(catalog, f"{ns}.silver_hose_ohlcv_daily", SILVER_OHLCV_SCHEMA, SILVER_OHLCV_PARTITION_SPEC),
@@ -180,6 +180,7 @@ def task_validate_silver(**context):
 
     ds = context["ds"]
     config = _get_config()
+    batch_id = context["ti"].xcom_pull(task_ids="extract_ohlcv", key="batch_id")
     catalog = load_lakehouse_catalog(config.iceberg)
     ns = config.iceberg.namespace
 
@@ -188,7 +189,7 @@ def task_validate_silver(**context):
     silver_day = silver.filter(silver["trading_date"].cast(str) == format_date(ds))
 
     result = validate_silver_ohlcv(silver_day, processing_date=format_date(ds))
-    result.raise_for_errors()
+    result.quarantine_and_raise(silver_day, domain="silver_ohlcv", processing_date=ds, batch_id=batch_id, config=config.minio)
 
 
 def task_build_gold_fact(**context):
@@ -236,6 +237,7 @@ def task_validate_gold(**context):
 
     ds = context["ds"]
     config = _get_config()
+    batch_id = context["ti"].xcom_pull(task_ids="extract_ohlcv", key="batch_id")
     catalog = load_lakehouse_catalog(config.iceberg)
     ns = config.iceberg.namespace
 
@@ -245,7 +247,7 @@ def task_validate_gold(**context):
 
     fact_day = fact.filter(fact["trading_date"].cast(str) == format_date(ds))
     result = validate_fact_daily_market(fact_day, dim_symbol, dim_date)
-    result.raise_for_errors()
+    result.quarantine_and_raise(fact_day, domain="gold_fact", processing_date=ds, batch_id=batch_id, config=config.minio)
 
 
 def task_sync_clickhouse(**context):
@@ -265,26 +267,9 @@ def task_sync_clickhouse(**context):
 
 
 # ---------------------------------------------------------------------------
-# Helper
+# Helper — reuse the single source of truth from the pipeline (no duplication)
 # ---------------------------------------------------------------------------
-
-def _replace_by_date(existing, replacement, date_column, processing_date):
-    """Replace rows for a specific date (idempotent overwrite)."""
-    import polars as pl
-
-    if existing is None or existing.is_empty():
-        return replacement
-    return (
-        pl.concat(
-            [
-                existing.filter(pl.col(date_column).cast(pl.Utf8) != processing_date),
-                replacement.filter(pl.col(date_column).cast(pl.Utf8) == processing_date),
-            ],
-            how="diagonal",
-        )
-        .select(existing.columns)
-        .sort(date_column)
-    )
+from stock_lakehouse.pipelines.daily_ohlcv import _replace_by_date
 
 
 # ---------------------------------------------------------------------------

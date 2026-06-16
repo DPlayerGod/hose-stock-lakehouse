@@ -14,6 +14,29 @@ class ValidationResult:
         if not self.is_valid:
             raise ValueError("; ".join(self.errors))
 
+    def quarantine_and_raise(
+        self,
+        df: pl.DataFrame,
+        *,
+        domain: str,
+        processing_date: str,
+        batch_id: str,
+        config=None,
+    ) -> None:
+        """Write failed batch to quarantine then raise. No-op when valid."""
+        if not self.is_valid:
+            from stock_lakehouse.staging.quarantine import write_quarantine
+            from stock_lakehouse.config import MinioConfig
+            uri = write_quarantine(
+                df,
+                self.errors,
+                domain=domain,
+                processing_date=processing_date,
+                batch_id=batch_id,
+                config=config or MinioConfig(),
+            )
+            raise ValueError(f"[quarantined={uri}] " + "; ".join(self.errors))
+
 
 def validate_bronze_ohlcv(df: pl.DataFrame) -> ValidationResult:
     errors = _required_columns(

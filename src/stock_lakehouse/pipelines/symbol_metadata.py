@@ -8,7 +8,7 @@ Flow:
     → write_staging_symbols
     → write_bronze_symbols
     → transform_silver_symbols
-    → validate_silver_symbols (embedded in build_silver_symbols)
+    → validate_silver_symbols
     → upsert_dim_symbol
     → sync_dim_symbol_to_clickhouse
 """
@@ -32,7 +32,7 @@ from stock_lakehouse.iceberg.tables import (
 )
 from stock_lakehouse.iceberg.writer import ensure_table, write_dataframe
 from stock_lakehouse.ingestion.symbols import extract_hose_symbols
-from stock_lakehouse.silver.symbols import build_silver_symbols
+from stock_lakehouse.silver.symbols import build_silver_symbols, validate_silver_symbols
 from stock_lakehouse.staging.writer import StagingPathBuilder, write_staging_parquet, read_staging_parquet
 
 
@@ -79,7 +79,12 @@ def run_symbol_metadata_pipeline(
         mode="overwrite",
     )
 
-    # 5. Upsert dim_symbol
+    # 5. Validate silver
+    validate_silver_symbols(silver).quarantine_and_raise(
+        silver, domain="silver_symbols", processing_date="latest", batch_id=batch_id, config=config.minio
+    )
+
+    # 6. Upsert dim_symbol
     existing_dim = try_read_table(catalog, f"{namespace}.dim_symbol")
     dim_symbol = build_dim_symbol(silver, existing_dim)
     write_dataframe(
@@ -88,7 +93,7 @@ def run_symbol_metadata_pipeline(
         mode="overwrite",
     )
 
-    # 6. Sync to ClickHouse
+    # 7. Sync to ClickHouse
     if sync_clickhouse:
         sync_dim_symbol_to_clickhouse(dim_symbol, config.clickhouse)
 
