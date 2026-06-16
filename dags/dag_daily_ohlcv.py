@@ -193,7 +193,7 @@ def task_validate_silver(**context):
 
 def task_build_gold_fact(**context):
     """Build fact_hose_daily_market and write to Iceberg."""
-    from stock_lakehouse.gold.fact_daily_market import build_fact_daily_market, replace_daily_market, build_symbol_indicator_state
+    from stock_lakehouse.gold.fact_daily_market import build_fact_daily_market, replace_daily_market
     from stock_lakehouse.iceberg.catalog import load_lakehouse_catalog
     from stock_lakehouse.iceberg.reader import try_read_table, read_table
     from stock_lakehouse.iceberg.tables import (
@@ -201,7 +201,6 @@ def task_build_gold_fact(**context):
         DIM_SYMBOL_SCHEMA,
         FACT_HOSE_DAILY_MARKET_SCHEMA,
         FACT_HOSE_DAILY_MARKET_PARTITION_SPEC,
-        SYMBOL_INDICATOR_STATE_SCHEMA,
     )
     from stock_lakehouse.iceberg.writer import ensure_table, write_dataframe
     from stock_lakehouse.utils.dates import format_date
@@ -220,16 +219,9 @@ def task_build_gold_fact(**context):
     existing_fact = try_read_table(catalog, f"{ns}.fact_hose_daily_market")
     fact_all = fact_day if existing_fact is None else replace_daily_market(existing_fact, fact_day, format_date(ds))
 
-    state = build_symbol_indicator_state(silver_all, dim_symbol, processing_date=format_date(ds))
-
     write_dataframe(
         ensure_table(catalog, f"{ns}.fact_hose_daily_market", FACT_HOSE_DAILY_MARKET_SCHEMA, FACT_HOSE_DAILY_MARKET_PARTITION_SPEC),
         fact_all,
-        mode="overwrite",
-    )
-    write_dataframe(
-        ensure_table(catalog, f"{ns}.symbol_indicator_state", SYMBOL_INDICATOR_STATE_SCHEMA),
-        state,
         mode="overwrite",
     )
     context["ti"].xcom_push(key="fact_rows", value=fact_day.height)

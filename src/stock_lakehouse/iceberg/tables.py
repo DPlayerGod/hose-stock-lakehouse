@@ -116,16 +116,6 @@ FACT_HOSE_DAILY_MARKET_SCHEMA = Schema(
     NestedField(field_id=16, name="updated_at", field_type=TimestamptzType(), required=True),
 )
 
-SYMBOL_INDICATOR_STATE_SCHEMA = Schema(
-    NestedField(field_id=1, name="symbol_key", field_type=LongType(), required=True),
-    NestedField(field_id=2, name="last_date", field_type=DateType(), required=True),
-    NestedField(field_id=3, name="last_close", field_type=DoubleType(), required=True),
-    NestedField(field_id=4, name="ema20", field_type=DoubleType(), required=False),
-    NestedField(field_id=5, name="avg_gain", field_type=DoubleType(), required=False),
-    NestedField(field_id=6, name="avg_loss", field_type=DoubleType(), required=False),
-    NestedField(field_id=7, name="updated_at", field_type=TimestamptzType(), required=True),
-)
-
 BRONZE_OHLCV_PARTITION_SPEC = PartitionSpec(
     PartitionField(source_id=2, field_id=1000, transform=MonthTransform(), name="time_month")
 )
