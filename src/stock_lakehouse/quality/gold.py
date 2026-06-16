@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from stock_lakehouse.quality.great_expectations import (
+from stock_lakehouse.quality.validators import (
     BetweenExpectation,
     NotNullExpectation,
     UniqueColumnsExpectation,
