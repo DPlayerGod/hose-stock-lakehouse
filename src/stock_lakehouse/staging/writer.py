@@ -33,6 +33,15 @@ class StagingPathBuilder:
             )
         )
 
+    def index(self, processing_date: str, batch_id: str) -> str:
+        return self.build(
+            StagingPath(
+                domain="index",
+                processing_date=format_date(processing_date),
+                batch_id=batch_id,
+            )
+        )
+
     def build(self, path: StagingPath) -> str:
         return (
             f"s3://{self.bucket}/{self.root}/{path.domain}/"

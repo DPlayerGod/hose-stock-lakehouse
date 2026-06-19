@@ -84,6 +84,32 @@ def ensure_gold_schema(client: Any, database: str = "lakehouse") -> None:
         ORDER BY (trading_date, symbol_key)
         """
     )
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS fact_hose_index_daily
+        (
+            index_code String,
+            date_key UInt32,
+            trading_date Date,
+            open_price Float64,
+            high_price Float64,
+            low_price Float64,
+            close_price Float64,
+            volume UInt64,
+            price_change Nullable(Float64),
+            pct_change Nullable(Float64),
+            sma20 Nullable(Float64),
+            ema20 Nullable(Float64),
+            rsi14 Nullable(Float64),
+            macd Nullable(Float64),
+            avg_volume_20d Nullable(Float64),
+            updated_at DateTime64(6, 'UTC')
+        )
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(trading_date)
+        ORDER BY (trading_date, index_code)
+        """
+    )
 
 
 def sync_gold_to_clickhouse(
@@ -142,6 +168,24 @@ def sync_fact_to_clickhouse(
     else:
         client.command("TRUNCATE TABLE fact_hose_daily_market")
     _insert_frame(client, "fact_hose_daily_market", fact)
+
+
+def sync_index_fact_to_clickhouse(
+    fact_df: pl.DataFrame,
+    processing_date: str | date | None = None,
+    config: ClickHouseConfig = ClickHouseConfig(),
+) -> None:
+    """Sync fact_hose_index_daily to ClickHouse (idempotent per processing_date)."""
+    client = get_clickhouse_client(config)
+    ensure_gold_schema(client, config.database)
+    fact = fact_df
+    if processing_date is not None:
+        target_date = format_date(processing_date)
+        fact = fact.filter(pl.col("trading_date").cast(pl.Utf8) == target_date)
+        client.command(f"ALTER TABLE fact_hose_index_daily DELETE WHERE trading_date = toDate('{target_date}')")
+    else:
+        client.command("TRUNCATE TABLE fact_hose_index_daily")
+    _insert_frame(client, "fact_hose_index_daily", fact)
 
 
 def _replace_dimension(client: Any, table_name: str, df: pl.DataFrame) -> None:

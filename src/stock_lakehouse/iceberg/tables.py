@@ -116,6 +116,29 @@ FACT_HOSE_DAILY_MARKET_SCHEMA = Schema(
     NestedField(field_id=16, name="updated_at", field_type=TimestamptzType(), required=True),
 )
 
+# Chỉ số thị trường (VN-Index, VN30…) dùng *cùng shape* OHLCV như cổ phiếu ở Bronze/Silver
+# (tái dùng BRONZE_OHLCV_SCHEMA / SILVER_OHLCV_SCHEMA, chỉ khác tên bảng). Khác biệt nằm ở Gold:
+# index định danh bằng natural key ``index_code`` (không surrogate, không join dim_symbol),
+# vẫn join dim_date + tính chỉ báo như fact giá.
+FACT_HOSE_INDEX_DAILY_SCHEMA = Schema(
+    NestedField(field_id=1, name="index_code", field_type=StringType(), required=True),
+    NestedField(field_id=2, name="date_key", field_type=IntegerType(), required=True),
+    NestedField(field_id=3, name="trading_date", field_type=DateType(), required=True),
+    NestedField(field_id=4, name="open_price", field_type=DoubleType(), required=True),
+    NestedField(field_id=5, name="high_price", field_type=DoubleType(), required=True),
+    NestedField(field_id=6, name="low_price", field_type=DoubleType(), required=True),
+    NestedField(field_id=7, name="close_price", field_type=DoubleType(), required=True),
+    NestedField(field_id=8, name="volume", field_type=LongType(), required=True),
+    NestedField(field_id=9, name="price_change", field_type=DoubleType(), required=False),
+    NestedField(field_id=10, name="pct_change", field_type=DoubleType(), required=False),
+    NestedField(field_id=11, name="sma20", field_type=DoubleType(), required=False),
+    NestedField(field_id=12, name="ema20", field_type=DoubleType(), required=False),
+    NestedField(field_id=13, name="rsi14", field_type=DoubleType(), required=False),
+    NestedField(field_id=14, name="macd", field_type=DoubleType(), required=False),
+    NestedField(field_id=15, name="avg_volume_20d", field_type=DoubleType(), required=False),
+    NestedField(field_id=16, name="updated_at", field_type=TimestamptzType(), required=True),
+)
+
 BRONZE_OHLCV_PARTITION_SPEC = PartitionSpec(
     PartitionField(source_id=2, field_id=1000, transform=MonthTransform(), name="time_month")
 )
@@ -123,5 +146,8 @@ SILVER_OHLCV_PARTITION_SPEC = PartitionSpec(
     PartitionField(source_id=2, field_id=1000, transform=MonthTransform(), name="trading_date_month")
 )
 FACT_HOSE_DAILY_MARKET_PARTITION_SPEC = PartitionSpec(
+    PartitionField(source_id=3, field_id=1000, transform=MonthTransform(), name="trading_date_month")
+)
+FACT_HOSE_INDEX_DAILY_PARTITION_SPEC = PartitionSpec(
     PartitionField(source_id=3, field_id=1000, transform=MonthTransform(), name="trading_date_month")
 )

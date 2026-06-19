@@ -12,6 +12,9 @@ load_dotenv()
 # Phạm vi đồ án: chỉ theo dõi 5 mã (giữ số lần gọi API trong giới hạn free-tier của vnstock).
 SYMBOLS: tuple[str, ...] = ("FPT", "VCB", "HPG", "VNM", "MWG")
 
+# Chỉ số thị trường — VNStock trả cùng dạng OHLCV như cổ phiếu (Quote(symbol="VNINDEX")).
+INDEX_SYMBOLS: tuple[str, ...] = ("VNINDEX", "VN30")
+
 
 @dataclass(frozen=True)
 class MinioConfig:
