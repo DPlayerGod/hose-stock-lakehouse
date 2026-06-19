@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from stock_lakehouse.quality.gold import validate_dim_symbol
+from stock_lakehouse.quality import validate_dim_symbol
 from stock_lakehouse.utils.dates import now_utc
 
 

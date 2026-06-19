@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from stock_lakehouse.quality.ohlcv import validate_bronze_ohlcv
+from stock_lakehouse.quality import validate_bronze_ohlcv
 from stock_lakehouse.staging.writer import read_staging_parquet
 from stock_lakehouse.utils.dates import now_utc
 

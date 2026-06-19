@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import holidays
 import polars as pl
 
-from stock_lakehouse.quality.gold import validate_dim_date
+from stock_lakehouse.quality import validate_dim_date
 
 
 DIM_DATE_COLUMNS = (

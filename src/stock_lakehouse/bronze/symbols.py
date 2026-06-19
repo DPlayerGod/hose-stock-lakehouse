@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from stock_lakehouse.quality.ohlcv import ValidationResult
+from stock_lakehouse.quality import validate_bronze_symbols
 
 
 BRONZE_SYMBOLS_COLUMNS = (
@@ -18,20 +18,6 @@ BRONZE_SYMBOLS_COLUMNS = (
     "batch_id",
     "ingested_at",
 )
-
-
-def validate_bronze_symbols(df: pl.DataFrame) -> ValidationResult:
-    """Basic quality checks for bronze symbol data."""
-    errors: list[str] = []
-    required = {"symbol", "source", "batch_id", "ingested_at"}
-    missing = sorted(required.difference(df.columns))
-    if missing:
-        errors.append(f"missing required columns: {missing}")
-    else:
-        for column in ("symbol", "source", "batch_id", "ingested_at"):
-            if df.filter(pl.col(column).is_null()).height:
-                errors.append(f"{column} contains null values")
-    return ValidationResult(not errors, tuple(errors))
 
 
 def build_bronze_symbols(staging_df: pl.DataFrame) -> pl.DataFrame:

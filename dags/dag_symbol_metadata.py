@@ -92,7 +92,7 @@ def task_transform_silver_symbols(**ctx):
 def task_validate_silver_symbols(**ctx):
     from stock_lakehouse.iceberg.catalog import load_lakehouse_catalog
     from stock_lakehouse.iceberg.reader import read_table
-    from stock_lakehouse.silver.symbols import validate_silver_symbols
+    from stock_lakehouse.quality import validate_silver_symbols
     config = _get_config()
     catalog = load_lakehouse_catalog(config.iceberg)
     ns = config.iceberg.namespace

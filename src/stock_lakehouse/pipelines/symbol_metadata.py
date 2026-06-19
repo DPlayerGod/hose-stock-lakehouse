@@ -17,8 +17,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import uuid4
 
-import polars as pl
-
 from stock_lakehouse.bronze.symbols import build_bronze_symbols
 from stock_lakehouse.clickhouse.loader import sync_dim_symbol_to_clickhouse
 from stock_lakehouse.config import PipelineConfig
@@ -32,8 +30,9 @@ from stock_lakehouse.iceberg.tables import (
 )
 from stock_lakehouse.iceberg.writer import ensure_table, write_dataframe
 from stock_lakehouse.ingestion.symbols import extract_hose_symbols
-from stock_lakehouse.silver.symbols import build_silver_symbols, validate_silver_symbols
-from stock_lakehouse.staging.writer import StagingPathBuilder, write_staging_parquet, read_staging_parquet
+from stock_lakehouse.quality import validate_silver_symbols
+from stock_lakehouse.silver.symbols import build_silver_symbols
+from stock_lakehouse.staging.writer import StagingPathBuilder, write_staging_parquet
 
 
 @dataclass(frozen=True)

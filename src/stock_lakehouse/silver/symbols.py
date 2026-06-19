@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from stock_lakehouse.quality.gold import validate_dim_symbol
-from stock_lakehouse.quality.ohlcv import ValidationResult
+from stock_lakehouse.quality import validate_silver_symbols
 from stock_lakehouse.utils.dates import now_utc
 
 
@@ -21,26 +20,6 @@ SILVER_SYMBOLS_COLUMNS = (
     "ingested_at",
     "updated_at",
 )
-
-
-def validate_silver_symbols(df: pl.DataFrame) -> ValidationResult:
-    """Validate silver symbol data — no duplicate symbols, required fields present."""
-    errors: list[str] = []
-    required = {"symbol", "exchange_code", "listed_status"}
-    missing = sorted(required.difference(df.columns))
-    if missing:
-        errors.append(f"missing required columns: {missing}")
-        return ValidationResult(False, tuple(errors))
-
-    for column in ("symbol", "exchange_code", "listed_status"):
-        if df.filter(pl.col(column).is_null()).height:
-            errors.append(f"{column} contains null values")
-
-    duplicate_count = df.group_by("symbol").len().filter(pl.col("len") > 1).height
-    if duplicate_count:
-        errors.append("silver symbols contain duplicate symbol rows")
-
-    return ValidationResult(not errors, tuple(errors))
 
 
 def build_silver_symbols(bronze_df: pl.DataFrame) -> pl.DataFrame:
