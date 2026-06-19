@@ -139,6 +139,56 @@ FACT_HOSE_INDEX_DAILY_SCHEMA = Schema(
     NestedField(field_id=16, name="updated_at", field_type=TimestamptzType(), required=True),
 )
 
+# Sự kiện doanh nghiệp (cổ tức, phát hành, giao dịch nội bộ, ĐHĐCĐ, niêm yết thêm…).
+# Feed VCI trả TOÀN BỘ lịch sử mỗi lần gọi → idempotency = dedup theo natural key
+# ``event_id`` + overwrite cả bảng (giống ``dim_symbol``), KHÔNG slice theo ngày D.
+# Bảng nhỏ (~5 mã, vài trăm sự kiện) nên để **unpartitioned**, như bảng symbols.
+# Bộ cột tinh gọn hướng dashboard: Ngày (event_date) · Mã (symbol) · Loại (event_label) ·
+# Chi tiết (title_vi) · Giá trị (value = cổ tức tiền/cp). ``event_date`` = display_date1.
+BRONZE_CORPORATE_EVENTS_SCHEMA = Schema(
+    NestedField(field_id=1, name="event_id", field_type=StringType(), required=True),
+    NestedField(field_id=2, name="symbol", field_type=StringType(), required=True),
+    NestedField(field_id=3, name="event_code", field_type=StringType(), required=True),
+    NestedField(field_id=4, name="event_title_vi", field_type=StringType(), required=False),
+    NestedField(field_id=5, name="value_per_share", field_type=DoubleType(), required=False),
+    NestedField(field_id=6, name="event_date", field_type=DateType(), required=True),
+    NestedField(field_id=7, name="source", field_type=StringType(), required=True),
+    NestedField(field_id=8, name="batch_id", field_type=StringType(), required=True),
+    NestedField(field_id=9, name="ingested_at", field_type=TimestamptzType(), required=True),
+    NestedField(field_id=10, name="processing_date", field_type=DateType(), required=True),
+)
+
+# Silver: làm sạch + dedup theo ``event_id`` + suy ``event_label`` từ ``event_code``.
+SILVER_CORPORATE_EVENTS_SCHEMA = Schema(
+    NestedField(field_id=1, name="event_id", field_type=StringType(), required=True),
+    NestedField(field_id=2, name="symbol", field_type=StringType(), required=True),
+    NestedField(field_id=3, name="event_date", field_type=DateType(), required=True),
+    NestedField(field_id=4, name="event_code", field_type=StringType(), required=True),
+    NestedField(field_id=5, name="event_label", field_type=StringType(), required=True),
+    NestedField(field_id=6, name="title_vi", field_type=StringType(), required=False),
+    NestedField(field_id=7, name="value", field_type=DoubleType(), required=False),
+    NestedField(field_id=8, name="source", field_type=StringType(), required=True),
+    NestedField(field_id=9, name="ingested_at", field_type=TimestamptzType(), required=True),
+)
+
+# Gold = **factless fact**: bảng ghi sự kiện, KHÔNG measure cộng dồn/indicator, chỉ
+# enforce FK fail-loud tới dim_symbol (``symbol_key``) + dim_date (``date_key``). Đây là
+# cách chuẩn để mô hình hoá "sự kiện liên kết với các chiều" (cần join dim_symbol/dim_date).
+# Giữ ``symbol`` denormalized cho tiện serving (lọc theo mã ở Streamlit); ``value`` (cổ tức
+# tiền/cp) là measure thưa, dùng được khi cần. Unpartitioned (bảng nhỏ, overwrite full).
+FACT_CORPORATE_EVENTS_SCHEMA = Schema(
+    NestedField(field_id=1, name="event_id", field_type=StringType(), required=True),
+    NestedField(field_id=2, name="symbol_key", field_type=LongType(), required=True),
+    NestedField(field_id=3, name="date_key", field_type=IntegerType(), required=True),
+    NestedField(field_id=4, name="symbol", field_type=StringType(), required=True),
+    NestedField(field_id=5, name="event_date", field_type=DateType(), required=True),
+    NestedField(field_id=6, name="event_code", field_type=StringType(), required=True),
+    NestedField(field_id=7, name="event_label", field_type=StringType(), required=True),
+    NestedField(field_id=8, name="title_vi", field_type=StringType(), required=False),
+    NestedField(field_id=9, name="value", field_type=DoubleType(), required=False),
+    NestedField(field_id=10, name="updated_at", field_type=TimestamptzType(), required=True),
+)
+
 BRONZE_OHLCV_PARTITION_SPEC = PartitionSpec(
     PartitionField(source_id=2, field_id=1000, transform=MonthTransform(), name="time_month")
 )

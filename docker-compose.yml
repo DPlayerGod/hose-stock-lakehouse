@@ -2,6 +2,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: postgres
+    profiles: ["pipeline"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -21,6 +22,7 @@ services:
   minio:
     image: minio/minio:latest
     container_name: minio
+    profiles: ["pipeline"]
     ports:
       - "${MINIO_PORT}:9000"
       - "${MINIO_CONSOLE_PORT}:9001"
@@ -41,6 +43,7 @@ services:
   minio-init:
     image: minio/mc:latest
     container_name: minio-init
+    profiles: ["pipeline"]
     depends_on:
       minio:
         condition: service_healthy
@@ -57,6 +60,7 @@ services:
   iceberg-rest:
     image: tabulario/iceberg-rest:0.6.0
     container_name: iceberg-rest
+    profiles: ["pipeline"]
     ports:
       - "${CATALOG_PORT}:8181"
     environment:
@@ -105,18 +109,37 @@ services:
     networks:
       - lakehouse_net
 
+  airflow-db-init:
+    image: postgres:16-alpine
+    container_name: airflow-db-init
+    profiles: ["pipeline"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    entrypoint: >
+      /bin/sh -c "
+      psql -h postgres -U ${POSTGRES_USER} -d postgres -c \"CREATE DATABASE airflow\" || true;
+      "
+    networks:
+      - lakehouse_net
+
   airflow-webserver:
     image: apache/airflow:2.9.3-python3.12
     container_name: airflow-webserver
+    profiles: ["pipeline"]
     depends_on:
       iceberg-rest:
         condition: service_started
       clickhouse:
         condition: service_healthy
+      airflow-db-init:
+        condition: service_completed_successfully
     environment:
-      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/logs/airflow.db
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
       AIRFLOW__WEBSERVER__SECRET_KEY: stock-lakehouse-dev
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
       PYTHONPATH: /opt/airflow/src
@@ -130,7 +153,7 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_REGION: ${AWS_REGION}
-      _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-polars pandas pyarrow>=17.0.0 pyiceberg[s3fs] boto3==1.43.0 botocore==1.43.0 s3fs==2026.4.0 aiobotocore==3.7.0 fsspec==2026.4.0 great-expectations vnstock holidays requests clickhouse-connect python-dotenv tenacity pydantic}
+      _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-polars pandas pyarrow>=17.0.0 pyiceberg[s3fs,pyiceberg-core] boto3==1.43.0 botocore==1.43.0 s3fs==2026.4.0 aiobotocore==3.7.0 fsspec==2026.4.0 vnstock holidays requests clickhouse-connect python-dotenv tenacity pydantic}
     volumes:
       - ./dags:/opt/airflow/dags
       - ./src:/opt/airflow/src
@@ -141,19 +164,26 @@ services:
       bash -c "airflow db migrate &&
       airflow users create --username admin --password admin --firstname Stock --lastname Lakehouse --role Admin --email admin@example.com || true &&
       airflow webserver"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 240s
     networks:
       - lakehouse_net
 
   airflow-scheduler:
     image: apache/airflow:2.9.3-python3.12
     container_name: airflow-scheduler
+    profiles: ["pipeline"]
     depends_on:
       airflow-webserver:
-        condition: service_started
+        condition: service_healthy
     environment:
-      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/logs/airflow.db
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
       PYTHONPATH: /opt/airflow/src
       MINIO_ENDPOINT: http://minio:9000
       CATALOG_URI_CLIENT: http://iceberg-rest:8181
@@ -165,12 +195,12 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_REGION: ${AWS_REGION}
-      _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-polars pandas pyarrow>=17.0.0 pyiceberg[s3fs] boto3==1.43.0 botocore==1.43.0 s3fs==2026.4.0 aiobotocore==3.7.0 fsspec==2026.4.0 great-expectations vnstock holidays requests clickhouse-connect python-dotenv tenacity pydantic}
+      _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-polars pandas pyarrow>=17.0.0 pyiceberg[s3fs,pyiceberg-core] boto3==1.43.0 botocore==1.43.0 s3fs==2026.4.0 aiobotocore==3.7.0 fsspec==2026.4.0 vnstock holidays requests clickhouse-connect python-dotenv tenacity pydantic}
     volumes:
       - ./dags:/opt/airflow/dags
       - ./src:/opt/airflow/src
       - ./logs:/opt/airflow/logs
-    command: bash -c "airflow db migrate && airflow scheduler"
+    command: bash -c "airflow scheduler"
     networks:
       - lakehouse_net
 

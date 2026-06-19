@@ -110,6 +110,25 @@ def ensure_gold_schema(client: Any, database: str = "lakehouse") -> None:
         ORDER BY (trading_date, index_code)
         """
     )
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS fact_corporate_events
+        (
+            event_id String,
+            symbol_key UInt64,
+            date_key UInt32,
+            symbol String,
+            event_date Date,
+            event_code String,
+            event_label String,
+            title_vi Nullable(String),
+            value Nullable(Float64),
+            updated_at DateTime64(6, 'UTC')
+        )
+        ENGINE = ReplacingMergeTree(updated_at)
+        ORDER BY (symbol, event_date, event_id)
+        """
+    )
 
 
 def sync_gold_to_clickhouse(
@@ -186,6 +205,21 @@ def sync_index_fact_to_clickhouse(
     else:
         client.command("TRUNCATE TABLE fact_hose_index_daily")
     _insert_frame(client, "fact_hose_index_daily", fact)
+
+
+def sync_corporate_events_to_clickhouse(
+    fact_df: pl.DataFrame,
+    config: ClickHouseConfig = ClickHouseConfig(),
+) -> None:
+    """Sync fact_corporate_events to ClickHouse.
+
+    Feed trả full lịch sử ⇒ fact là snapshot toàn bộ → truncate + insert (idempotent,
+    không cần slice theo ngày như fact giá).
+    """
+    client = get_clickhouse_client(config)
+    ensure_gold_schema(client, config.database)
+    client.command("TRUNCATE TABLE fact_corporate_events")
+    _insert_frame(client, "fact_corporate_events", fact_df)
 
 
 def _replace_dimension(client: Any, table_name: str, df: pl.DataFrame) -> None:
