@@ -1,0 +1,16 @@
+polars
+pandas
+pyarrow>=17.0.0
+pyiceberg[s3fs,pyiceberg-core]
+boto3==1.43.0
+botocore==1.43.0
+s3fs==2026.4.0
+aiobotocore==3.7.0
+fsspec==2026.4.0
+vnstock
+holidays
+requests
+clickhouse-connect
+python-dotenv
+tenacity
+pydantic

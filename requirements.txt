@@ -4,20 +4,22 @@ pandas
 pyarrow>=17.0.0
 
 # Lakehouse / Iceberg / MinIO
-pyiceberg[s3fs]
+# pyiceberg-core: Rust extension required to apply partition transforms
+# (e.g. month(time)) when writing to partitioned Iceberg tables.
+pyiceberg[s3fs,pyiceberg-core]
 boto3==1.43.0
 botocore==1.43.0
 s3fs==2026.4.0
 aiobotocore==3.7.0
 fsspec==2026.4.0
 
-# Data quality
-great-expectations
+# Data quality: validate bằng Polars (xem data_quality.md) — không cần thư viện ngoài
 
 # Data sources
 vnstock
 holidays
 requests
+plotly
 
 # Serving database
 clickhouse-connect
@@ -27,9 +29,6 @@ streamlit
 python-dotenv
 tenacity
 pydantic
-
-# Orchestration (runs in Docker, not local venv)
-apache-airflow>=2.9,<3
 
 # Development / testing
 pytest
