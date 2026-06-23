@@ -59,7 +59,7 @@ def task_extract_index(**context):
     """Extract index OHLCV from VNStock / VCI for the processing date."""
     from stock_lakehouse.ingestion.ohlcv import OhlcvExtractRequest, extract_ohlcv
 
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     request = OhlcvExtractRequest.daily(ds, symbols=_get_indices(), source="VCI")
     df = extract_ohlcv(request)
     context["ti"].xcom_push(key="batch_id", value=request.batch_id)
@@ -73,7 +73,7 @@ def task_write_staging(**context):
     from stock_lakehouse.staging.writer import StagingPathBuilder, write_staging_parquet
     from stock_lakehouse.utils.dates import format_date
 
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     config = _get_config()
     batch_id = context["ti"].xcom_pull(task_ids="extract_index", key="batch_id")
 
@@ -90,7 +90,7 @@ def task_validate_staging(**context):
     from stock_lakehouse.staging.writer import read_staging_parquet
 
     config = _get_config()
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     batch_id = context["ti"].xcom_pull(task_ids="extract_index", key="batch_id")
     staging_uri = context["ti"].xcom_pull(task_ids="write_staging", key="staging_uri")
     df = read_staging_parquet(staging_uri, config.minio)
@@ -114,7 +114,7 @@ def task_write_bronze(**context):
     from stock_lakehouse.staging.writer import read_staging_parquet
     from stock_lakehouse.utils.dates import format_date
 
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     config = _get_config()
     staging_uri = context["ti"].xcom_pull(task_ids="write_staging", key="staging_uri")
     staging_df = read_staging_parquet(staging_uri, config.minio)
@@ -146,7 +146,7 @@ def task_transform_silver(**context):
     from stock_lakehouse.staging.writer import read_staging_parquet
     from stock_lakehouse.utils.dates import format_date
 
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     config = _get_config()
     staging_uri = context["ti"].xcom_pull(task_ids="write_staging", key="staging_uri")
     staging_df = read_staging_parquet(staging_uri, config.minio)
@@ -175,7 +175,7 @@ def task_validate_silver(**context):
     from stock_lakehouse.quality import validate_silver_ohlcv
     from stock_lakehouse.utils.dates import format_date
 
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     config = _get_config()
     batch_id = context["ti"].xcom_pull(task_ids="extract_index", key="batch_id")
     catalog = load_lakehouse_catalog(config.iceberg)
@@ -200,7 +200,7 @@ def task_build_gold_fact(**context):
     from stock_lakehouse.iceberg.writer import ensure_table, write_dataframe
     from stock_lakehouse.utils.dates import format_date
 
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     config = _get_config()
     catalog = load_lakehouse_catalog(config.iceberg)
     ns = config.iceberg.namespace
@@ -228,7 +228,7 @@ def task_validate_gold(**context):
     from stock_lakehouse.quality import validate_fact_index_daily
     from stock_lakehouse.utils.dates import format_date
 
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     config = _get_config()
     batch_id = context["ti"].xcom_pull(task_ids="extract_index", key="batch_id")
     catalog = load_lakehouse_catalog(config.iceberg)
@@ -249,7 +249,7 @@ def task_sync_clickhouse(**context):
     from stock_lakehouse.iceberg.reader import read_table
     from stock_lakehouse.utils.dates import format_date
 
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     config = _get_config()
     catalog = load_lakehouse_catalog(config.iceberg)
     ns = config.iceberg.namespace

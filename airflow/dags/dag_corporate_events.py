@@ -55,7 +55,7 @@ def task_extract_events(**context):
     from stock_lakehouse.staging.writer import StagingPathBuilder, write_staging_parquet
     from uuid import uuid4
 
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     config = _get_config()
     batch_id = uuid4().hex
 
@@ -74,7 +74,7 @@ def task_validate_staging(**context):
     from stock_lakehouse.staging.writer import read_staging_parquet
 
     config = _get_config()
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     batch_id = context["ti"].xcom_pull(task_ids="extract_events", key="batch_id")
     staging_uri = context["ti"].xcom_pull(task_ids="extract_events", key="staging_uri")
     df = read_staging_parquet(staging_uri, config.minio)
@@ -142,7 +142,7 @@ def task_validate_silver(**context):
     from stock_lakehouse.quality import validate_silver_corporate_events
 
     config = _get_config()
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     batch_id = context["ti"].xcom_pull(task_ids="extract_events", key="batch_id")
     catalog = load_lakehouse_catalog(config.iceberg)
     ns = config.iceberg.namespace
@@ -185,7 +185,7 @@ def task_validate_gold(**context):
     from stock_lakehouse.quality import validate_fact_corporate_events
 
     config = _get_config()
-    ds = context["ds"]
+    ds = context["data_interval_end"].date().isoformat()
     batch_id = context["ti"].xcom_pull(task_ids="extract_events", key="batch_id")
     catalog = load_lakehouse_catalog(config.iceberg)
     ns = config.iceberg.namespace
