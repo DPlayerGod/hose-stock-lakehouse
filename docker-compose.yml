@@ -90,6 +90,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.3-alpine
     container_name: clickhouse
+    profiles: ["pipeline", "streaming"]
     mem_limit: 2g
     restart: unless-stopped
     ports:
@@ -164,6 +165,7 @@ services:
         condition: service_completed_successfully
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Ho_Chi_Minh
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
       AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
@@ -212,6 +214,7 @@ services:
         condition: service_healthy
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Ho_Chi_Minh
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
       PYTHONPATH: /opt/airflow/src
@@ -238,11 +241,15 @@ services:
       context: .
       dockerfile: streamlit_app/Dockerfile
     container_name: streamlit
+    profiles: ["pipeline", "streaming"]
     restart: unless-stopped
     depends_on:
       clickhouse:
         condition: service_healthy
     working_dir: /app
+    volumes:
+      - ./streamlit_app:/app
+      - ./src:/app/src
     environment:
       PYTHONPATH: /app/src
       CLICKHOUSE_HOST: clickhouse
@@ -250,8 +257,71 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_OHLC: dnse.ohlc
+      DNSE_API_KEY: ${DNSE_API_KEY}
+      DNSE_API_SECRET: ${DNSE_API_SECRET}
+      DNSE_WS_URL: ${DNSE_WS_URL}
+      DNSE_ENCODING: ${DNSE_ENCODING}
+      OHLC_RESOLUTION: ${OHLC_RESOLUTION}
     ports:
-      - "${STREAMLIT_PORT:-8501}:8501"
+      - "${STREAMLIT_PORT:-8502}:8501"
+    networks:
+      - lakehouse_net
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    profiles: ["streaming"]
+    restart: unless-stopped
+    user: "0:0"
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: controller,broker
+      KAFKA_LISTENERS: DOCKER_INTERNAL://0.0.0.0:9092,HOST://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: DOCKER_INTERNAL://kafka:9092,HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,DOCKER_INTERNAL:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER_INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /var/lib/kafka/logs
+    volumes:
+      - kafka_data:/var/lib/kafka/logs
+    networks:
+      - lakehouse_net
+
+  ohlc-producer:
+    build:
+      context: .
+      dockerfile: streamlit_app/Dockerfile
+    container_name: ohlc-producer
+    profiles: ["streaming"]
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_started
+    working_dir: /app
+    volumes:
+      - ./streamlit_app:/app
+      - ./src:/app/src
+    command: >
+      sh -c "PYTHONPATH=/app/src python -m stock_lakehouse.streaming.producer.ohlc_producer"
+    environment:
+      PYTHONPATH: /app/src
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_OHLC: dnse.ohlc
+      DNSE_API_KEY: ${DNSE_API_KEY}
+      DNSE_API_SECRET: ${DNSE_API_SECRET}
+      DNSE_WS_URL: ${DNSE_WS_URL}
+      DNSE_ENCODING: ${DNSE_ENCODING}
+      OHLC_RESOLUTION: ${OHLC_RESOLUTION}
     networks:
       - lakehouse_net
 
@@ -259,6 +329,7 @@ volumes:
   postgres_data:
   minio_data:
   clickhouse_data:
+  kafka_data:
 
 networks:
   lakehouse_net:

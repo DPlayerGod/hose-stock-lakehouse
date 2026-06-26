@@ -192,6 +192,56 @@ def validate_fact_daily_market(
     )
 
 
+def validate_bronze_corporate_events(df: pl.DataFrame) -> ValidationResult:
+    """Bronze sự kiện = raw đã ép kiểu → chỉ COMPLETENESS (đủ cột + khoá không null)."""
+    required = ("event_id", "symbol", "event_code", "event_date", "source", "batch_id", "ingested_at")
+    return _validate(
+        df,
+        suite_name="bronze_hose_corporate_events",
+        required=required,
+        checks=[NotNull(("event_id", "symbol", "event_code", "event_date", "source", "batch_id", "ingested_at"))],
+    )
+
+
+def validate_silver_corporate_events(df: pl.DataFrame) -> ValidationResult:
+    """Silver sự kiện — COMPLETENESS + UNIQUENESS (event_id) + VALIDITY (value ≥ 0)."""
+    required = ("event_id", "symbol", "event_date", "event_code", "event_label")
+    return _validate(
+        df,
+        suite_name="silver_hose_corporate_events",
+        required=required,
+        checks=[
+            NotNull(required),
+            Unique(("event_id",)),
+            InRange("value", min_value=0),
+        ],
+    )
+
+
+def validate_fact_corporate_events(
+    fact_df: pl.DataFrame,
+    dim_symbol_df: pl.DataFrame,
+    dim_date_df: pl.DataFrame,
+) -> ValidationResult:
+    """fact_corporate_events — COMPLETENESS (khoá), UNIQUENESS (event_id),
+    VALIDITY (value ≥ 0), CONSISTENCY (FK fail-loud tới dim_symbol + dim_date).
+
+    Không có indicator/biên độ giá nên bỏ ACCURACY; TIMELINESS không áp (sự kiện
+    rải nhiều ngày, không phải snapshot ngày D).
+    """
+    required = ("event_id", "symbol_key", "date_key", "event_date")
+    checks: list[Check] = [
+        NotNull(("event_id", "symbol_key", "date_key", "event_date")),
+        Unique(("event_id",)),
+        InRange("value", min_value=0),
+        ForeignKey("symbol_key", dim_symbol_df, "symbol_key", name="fact_events->dim_symbol"),
+        ForeignKey("date_key", dim_date_df, "date_key", name="fact_events->dim_date"),
+    ]
+    return _validate(
+        fact_df, suite_name="fact_corporate_events", required=required, checks=checks
+    )
+
+
 def validate_fact_index_daily(
     fact_df: pl.DataFrame,
     dim_date_df: pl.DataFrame,

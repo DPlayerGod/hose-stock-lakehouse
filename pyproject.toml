@@ -10,4 +10,7 @@ markers = [
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.13"
-extraPaths = ["src"]
+extraPaths = ["src", "streamlit_app"]
+
+[tool.pyrefly]
+search_path = ["src", "streamlit_app"]
