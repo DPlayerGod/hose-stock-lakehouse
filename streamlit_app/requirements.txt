@@ -1,0 +1,8 @@
+clickhouse-connect
+kafka-python
+msgpack
+pandas
+plotly
+polars
+python-dotenv
+streamlit
