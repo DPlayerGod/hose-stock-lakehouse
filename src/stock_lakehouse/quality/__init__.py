@@ -34,12 +34,15 @@ from stock_lakehouse.quality.result import (
     ValidationResult,
 )
 from stock_lakehouse.quality.suites import (
+    validate_bronze_corporate_events,
     validate_bronze_ohlcv,
     validate_bronze_symbols,
     validate_dim_date,
     validate_dim_symbol,
+    validate_fact_corporate_events,
     validate_fact_daily_market,
     validate_fact_index_daily,
+    validate_silver_corporate_events,
     validate_silver_ohlcv,
     validate_silver_symbols,
 )
@@ -73,4 +76,7 @@ __all__ = [
     "validate_dim_symbol",
     "validate_fact_daily_market",
     "validate_fact_index_daily",
+    "validate_bronze_corporate_events",
+    "validate_silver_corporate_events",
+    "validate_fact_corporate_events",
 ]
