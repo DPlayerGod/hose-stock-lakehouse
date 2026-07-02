@@ -10,6 +10,9 @@ import streamlit as st
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT_DIR / "src"
+APP_DIR = Path(__file__).resolve().parent
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
@@ -33,40 +36,54 @@ except Exception:
     meta = {"latest_date": None, "rows": 0}
     batch_ready = False
 
-with st.sidebar:
-    st.title("DNSE Streaming")
-    st.caption("Powered by ClickHouse Kafka Engine")
 
-st.title("HOSE Analytics")
+# ── Page: Cổ phiếu ───────────────────────────────────────────────────────────
+def page_cophieu():
+    st.caption("DNSE Streaming · Powered by ClickHouse Kafka Engine")
+    st.title("HOSE Analytics")
+    if batch_ready:
+        latest_date = meta["latest_date"]
+        updated_label = latest_date.strftime("%d/%m/%Y") + " 15:00"
+        st.markdown(f'<p class="ha-sub">Cập nhật {updated_label}</p>', unsafe_allow_html=True)
+    else:
+        st.markdown('<p class="ha-sub">Chưa có dữ liệu batch - Realtime vẫn hoạt động</p>', unsafe_allow_html=True)
+    st.write("")
+    render_stock_view(batch_ready)
 
-view = st.segmented_control(
-    "view", ["Cổ phiếu", "Market Overview", "Realtime"], default="Cổ phiếu",
-    label_visibility="collapsed",
-)
-view = view or "Cổ phiếu"
 
-# ── "Cập nhật" label: context-aware per view ──
-if view == "Realtime":
+# ── Page: Market Overview ─────────────────────────────────────────────────────
+def page_market_overview():
+    st.caption("DNSE Streaming · Powered by ClickHouse Kafka Engine")
+    st.title("HOSE Analytics")
+    if batch_ready:
+        latest_date = meta["latest_date"]
+        updated_label = latest_date.strftime("%d/%m/%Y") + " 15:00"
+        st.markdown(f'<p class="ha-sub">Cập nhật {updated_label}</p>', unsafe_allow_html=True)
+    else:
+        st.markdown('<p class="ha-sub">Chưa có dữ liệu batch - Realtime vẫn hoạt động</p>', unsafe_allow_html=True)
+    st.write("")
+    render_market_view(batch_ready)
+
+
+# ── Page: Realtime ─────────────────────────────────────────────────────────────
+def page_realtime():
+    st.caption("DNSE Streaming · Powered by ClickHouse Kafka Engine")
+    st.title("HOSE Analytics")
     now_ict = datetime.now(ICT)
     updated_label = now_ict.strftime("%d/%m/%Y %H:%M")
     st.markdown(f'<p class="ha-sub">Cập nhật {updated_label}</p>', unsafe_allow_html=True)
-elif batch_ready:
-    latest_date = meta["latest_date"]
-    updated_label = latest_date.strftime("%d/%m/%Y") + " 15:00"
-    st.markdown(f'<p class="ha-sub">Cập nhật {updated_label}</p>', unsafe_allow_html=True)
-else:
-    st.markdown('<p class="ha-sub">Chưa có dữ liệu batch - Realtime vẫn hoạt động</p>', unsafe_allow_html=True)
-
-st.write("")
-
-if view == "Market Overview":
-    render_market_view(batch_ready)
-elif view == "Realtime":
+    st.write("")
     render_realtime_view()
-else:
-    render_stock_view(batch_ready)
 
-if view == "Realtime":
     time.sleep(REFRESH_SEC)
     st.rerun()
 
+
+# ── Navigation ─────────────────────────────────────────────────────────────────
+pg = st.navigation([
+    st.Page(page_cophieu, title="Cổ phiếu", url_path="cophieu", default=True),
+    st.Page(page_market_overview, title="Market Overview", url_path="market_overview"),
+    st.Page(page_realtime, title="Realtime", url_path="realtime"),
+])
+
+pg.run()

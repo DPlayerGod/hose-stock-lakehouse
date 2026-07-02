@@ -35,36 +35,32 @@ def realtime_symbol_options(latest_prices: pd.DataFrame) -> list[str]:
     return symbols[:5]
 
 
-def eod_as_intraday_frame(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    out = df.rename(columns={"trading_date": "candle_time", "latest_price": "close", "latest_quantity": "volume"}).copy()
-    for col in ("open", "high", "low", "close", "volume"):
-        if col in out.columns:
-            out[col] = pd.to_numeric(out[col], errors="coerce")
-    return out
-
-
 def signal_snapshot_from_candles(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
     last = df.iloc[-1]
     latest_price = float(last["close"])
     vwap = last.get("vwap")
-    sma20 = last.get("sma20")
+    sigma = last.get("sigma", 0)
     rsi14 = last.get("rsi14")
     signal = "NEUTRAL"
-    if pd.notna(vwap) and pd.notna(sma20):
-        if latest_price > float(vwap) and latest_price > float(sma20):
+    if pd.notna(vwap) and pd.notna(sigma) and sigma > 0:
+        k = BAND_SIGMA_MULTIPLIER
+        upper = float(vwap) + k * float(sigma)
+        lower = float(vwap) - k * float(sigma)
+        if latest_price > upper:
             signal = "BULLISH"
-        elif latest_price < float(vwap) and latest_price < float(sma20):
+        elif latest_price < lower:
             signal = "BEARISH"
+        elif latest_price > float(vwap):
+            signal = "SLIGHTLY_BULLISH"
+        elif latest_price < float(vwap):
+            signal = "SLIGHTLY_BEARISH"
     return pd.DataFrame([
         {
             "symbol": symbol,
             "latest_price": latest_price,
             "vwap": vwap,
-            "sma20": sma20,
             "rsi14": rsi14,
             "signal_type": signal,
             "created_at": last["candle_time"],
@@ -78,21 +74,10 @@ def render_realtime_view() -> None:
     summary = load_summary_realtime()
     realtime_today = summary.get("candles", 0) > 0
     latest_prices = load_latest_prices()
-    market_closed = not realtime_today
-    eod = pd.DataFrame()
 
-    if latest_prices.empty or market_closed:
-        eod = load_eod_prices()
-        if latest_prices.empty and eod.empty:
-            st.info("Chưa có dữ liệu realtime/EOD. Kiểm tra Kafka, OHLC producer và DDL streaming.")
-            return
-        if latest_prices.empty:
-            latest_prices = eod.sort_values(["symbol", "trading_date"]).groupby("symbol", as_index=False).last()
-        if market_closed:
-            st.info(
-                "**Phiên đang đóng hoặc chưa có nến realtime hôm nay - đang hiển thị dữ liệu EOD gần nhất.** "
-                "Khi realtime có dữ liệu, view này sẽ tự chuyển sang intraday."
-            )
+    if latest_prices.empty:
+        st.info("Chưa có dữ liệu realtime. Kiểm tra Kafka, OHLC producer và DDL streaming.")
+        return
 
     st.markdown("#### Realtime")
     options = realtime_symbol_options(latest_prices)
@@ -105,69 +90,67 @@ def render_realtime_view() -> None:
     with ctrl_date:
         selected_day = st.date_input("Ngày", value=today_date, key="rt_trading_day")
     with ctrl_tf:
-        rt_timeframe = st.selectbox("Khung nến", ["1 phút", "5 phút", "15 phút", "Ngày"], key="rt_timeframe")
+        rt_timeframe = st.selectbox("Khung nến", ["1 phút", "5 phút", "15 phút"], key="rt_timeframe")
     with ctrl_chart:
         chart_style = st.selectbox("Kiểu biểu đồ", ["Nến", "Multi indicator"], key="rt_chart_style")
 
-    prev_close_map = load_prev_close()
-    sym_row = latest_prices[latest_prices["symbol"] == rt_symbol]
-    if not sym_row.empty:
-        row = sym_row.iloc[-1]
-        price = row.get("latest_price")
-        qty = row.get("latest_quantity")
-        ref_price = prev_close_map.get(rt_symbol)
-        if pd.notna(price) and ref_price and ref_price != 0:
-            pct = (float(price) - ref_price) / ref_price
-        else:
-            pct = 0.0
-        c1, c2 = st.columns([1, 1])
-        c1.metric("Giá realtime", vn_dec(cast(float, price), 2) if pd.notna(price) else "-",
-                  fmt_pct(pct))
-        c2.metric("Khối lượng", vn_int(cast(float, qty)) if pd.notna(qty) else "-")
+    prev_close = previous_close_for(rt_symbol, selected_day)
 
     ctrl_left, ctrl_right = st.columns([1, 1])
     with ctrl_left:
-        candle_count = st.slider("Số nến", 10, 200, 60, step=10, key="rt_candle_count")
+        candle_count = st.slider("Số nến", 10, 400, 60, step=10, key="rt_candle_count")
     with ctrl_right:
         rt_start_time = st.time_input("Từ giờ", value=datetime.strptime("09:00", "%H:%M").time(), key="rt_start_time")
 
     st.divider()
 
     sym_candles = pd.DataFrame()
-    if rt_timeframe == "Ngày" or market_closed:
-        if eod.empty:
-            eod = load_eod_prices()
-        sym_eod = eod[eod["symbol"] == rt_symbol].sort_values("trading_date")
-        sym_eod = sym_eod[sym_eod["trading_date"].dt.date <= selected_day].tail(candle_count)  # type: ignore[attr-defined]
-        latest_day = sym_eod["trading_date"].max() if not sym_eod.empty else pd.NaT
-        suffix = latest_day.strftime("%d/%m/%Y") if pd.notna(latest_day) else "EOD"
-        st.markdown(f"**{rt_symbol}** - EOD ({suffix})")
-        eod_chart_df = enrich_realtime_candles(eod_as_intraday_frame(sym_eod))
-        if chart_style == "Bar + SMA/VWAP":
-            fig = build_realtime_bar_chart(eod_chart_df, rt_symbol)
-        elif chart_style == "Nến":
-            fig = build_candlestick_chart(eod_chart_df, rt_symbol)
-        else:
-            fig = eod_realtime_fallback_figure(sym_eod, rt_symbol)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    day_is_trading = is_trading_day(selected_day)
+
+    if not day_is_trading:
+        st.info(
+            f"{selected_day:%d/%m/%Y} không phải ngày giao dịch. "
+            f"Không có dữ liệu intraday cho ngày này."
+        )
     else:
-        candles_raw = load_realtime_candles(rt_symbol, candle_count * 20, selected_day)
+        # Cache buster để force reload data khi thời gian thay đổi
+        cache_buster = f"{selected_day.isoformat()}_{rt_start_time.isoformat()}"
+        candles_raw = load_realtime_candles(rt_symbol, candle_count * 20, selected_day, cache_buster)
         if not candles_raw.empty:
-            start_dt = pd.Timestamp(
-                year=selected_day.year,
-                month=selected_day.month,
-                day=selected_day.day,
-                hour=rt_start_time.hour,
-                minute=rt_start_time.minute,
-                tz="Asia/Ho_Chi_Minh",
-            )
-            candles_raw = candles_raw[candles_raw["candle_time"] >= start_dt]
-        candles_raw = aggregate_intraday_candles(candles_raw, rt_timeframe)
-        sym_candles = enrich_realtime_candles(candles_raw).tail(candle_count)
+            candles_raw = aggregate_intraday_candles(candles_raw, rt_timeframe)
+            # Tính RSI trên toàn bộ data TRƯỚC khi filter theo thời gian
+            sym_candles = enrich_realtime_candles(candles_raw)
+            # Filter theo thời gian bắt đầu (phải đủ nến cho RSI trước start_dt)
+            if rt_start_time:
+                start_dt = pd.Timestamp(
+                    year=selected_day.year,
+                    month=selected_day.month,
+                    day=selected_day.day,
+                    hour=rt_start_time.hour,
+                    minute=rt_start_time.minute,
+                    tz="Asia/Ho_Chi_Minh",
+                )
+                sym_candles = sym_candles[sym_candles["candle_time"] >= start_dt]
+            # Lấy số nến hiển thị
+            sym_candles = sym_candles.tail(candle_count)
 
         if sym_candles.empty:
             st.info(f"Chưa có nến intraday cho {rt_symbol} ngày {selected_day:%d/%m/%Y}.")
+            c1, c2 = st.columns([1, 1])
+            c1.metric("Giá", "-", "-")
+            c2.metric("Khối lượng", "-")
         else:
+            last_price = float(sym_candles.iloc[-1]["close"])
+            total_volume = sym_candles["volume"].sum()
+            if prev_close and prev_close != 0:
+                pct = (last_price - prev_close) / prev_close
+            else:
+                pct = 0.0
+
+            c1, c2 = st.columns([1, 1])
+            c1.metric("Giá", vn_dec(last_price, 2), fmt_pct(pct))
+            c2.metric("Khối lượng", vn_int(total_volume))
+
             st.markdown(f"**{rt_symbol}** - {rt_timeframe} ({selected_day:%d/%m/%Y})")
             if chart_style == "Nến":
                 fig = build_candlestick_chart(sym_candles, rt_symbol)
@@ -192,17 +175,14 @@ def render_realtime_view() -> None:
     tab_signal, tab_latency = st.tabs(["Signal Detection", "Latency Monitor"])
 
     with tab_signal:
-        signals = load_realtime_signals()
-        if not signals.empty:
-            st.markdown("**Latest realtime signals**")
-            st.dataframe(signals.head(20), use_container_width=True, hide_index=True)
+        # Use computed snapshot from fresh candles — always in sync with chart RSI
+        computed_signal = signal_snapshot_from_candles(sym_candles, rt_symbol)
+        if computed_signal.empty:
+            st.info("Chưa có tín hiệu trong phiên.")
         else:
-            fallback_signal = signal_snapshot_from_candles(sym_candles, rt_symbol)
-            if fallback_signal.empty:
-                st.info("Chưa có tín hiệu trong phiên.")
-            else:
-                st.caption("Bảng signal chưa có dữ liệu, đang tính snapshot từ nến realtime hiện có.")
-                st.dataframe(fallback_signal, use_container_width=True, hide_index=True)
+            st.markdown("**Latest realtime signals**")
+            st.caption("Tính từ nến realtime.")
+            st.dataframe(computed_signal, use_container_width=True, hide_index=True)
 
         alerts = load_realtime_alerts()
         if not alerts.empty:
@@ -214,7 +194,7 @@ def render_realtime_view() -> None:
             st.dataframe(alerts[display_cols].head(20), use_container_width=True, hide_index=True)
 
     with tab_latency:
-        if market_closed:
+        if not realtime_today:
             st.caption("Độ trễ pipeline không khả dụng ngoài giờ giao dịch hoặc khi chưa có nến realtime hôm nay.")
         else:
             latency_window = st.slider("Cửa sổ phân tích (phút)", 5, 60, 30, step=5, key="latency_window")

@@ -41,8 +41,8 @@ SELECT
     round(min(date_diff('millisecond', candle_time, received_at)), 1)                    AS min_ms,
     round(max(date_diff('millisecond', candle_time, received_at)), 1)                  AS max_ms
 FROM rt_hose_ohlcv_1m
-WHERE toDate(candle_time) = today()
-  AND candle_time >= now() - INTERVAL {window} MINUTE
+WHERE toDate(candle_time, 'Asia/Ho_Chi_Minh') = toDate(now('Asia/Ho_Chi_Minh'))
+  AND candle_time >= now('Asia/Ho_Chi_Minh') - INTERVAL {window} MINUTE
 """
 
 LATEST_SQL = """
@@ -52,7 +52,7 @@ SELECT
     received_at,
     date_diff('millisecond', candle_time, received_at) AS latency_ms
 FROM rt_hose_ohlcv_1m
-WHERE toDate(candle_time) = today()
+WHERE toDate(candle_time, 'Asia/Ho_Chi_Minh') = toDate(now('Asia/Ho_Chi_Minh'))
 ORDER BY received_at DESC
 LIMIT 1
 """
@@ -64,8 +64,8 @@ SELECT
     round(avg(date_diff('millisecond', candle_time, received_at)), 1)                   AS avg_ms,
     round(quantile(0.95)(date_diff('millisecond', candle_time, received_at)), 1)       AS p95_ms
 FROM rt_hose_ohlcv_1m
-WHERE toDate(candle_time) = today()
-  AND candle_time >= now() - INTERVAL {window} MINUTE
+WHERE toDate(candle_time, 'Asia/Ho_Chi_Minh') = toDate(now('Asia/Ho_Chi_Minh'))
+  AND candle_time >= now('Asia/Ho_Chi_Minh') - INTERVAL {window} MINUTE
 GROUP BY minute
 ORDER BY minute ASC
 """
@@ -84,8 +84,8 @@ SELECT
 FROM (
     SELECT date_diff('millisecond', candle_time, received_at) AS latency_ms
     FROM rt_hose_ohlcv_1m
-    WHERE toDate(candle_time) = today()
-      AND candle_time >= now() - INTERVAL {window} MINUTE
+    WHERE toDate(candle_time, 'Asia/Ho_Chi_Minh') = toDate(now('Asia/Ho_Chi_Minh'))
+      AND candle_time >= now('Asia/Ho_Chi_Minh') - INTERVAL {window} MINUTE
 )
 GROUP BY bucket
 ORDER BY bucket ASC

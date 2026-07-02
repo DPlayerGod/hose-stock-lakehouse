@@ -5,10 +5,15 @@ Call after ClickHouse is up (e.g. as a one-time init step or startup task).
 
 Usage:
     python -m stock_lakehouse.streaming.clickhouse.init
+
+Environment variables:
+    KAFKA_BOOTSTRAP_SERVERS: Kafka broker address (default: kafka:9092)
+    KAFKA_TOPIC_OHLC:       Kafka topic for OHLC data (default: dnse.ohlc)
 """
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from stock_lakehouse.clickhouse.client import get_clickhouse_client
@@ -34,11 +39,11 @@ def init_streaming_schema(config: ClickHouseConfig | None = None) -> None:
     # by ClickHouse; for local dev replace with the value from config
     sql_content = sql_content.replace(
         "${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}",
-        "kafka:9092",
+        os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"),
     )
     sql_content = sql_content.replace(
         "${KAFKA_TOPIC_OHLC:-dnse.ohlc}",
-        "dnse.ohlc",
+        os.environ.get("KAFKA_TOPIC_OHLC", "dnse.ohlc"),
     )
 
     logger.info("Running streaming DDL in %s/%s ...", config.database, config.host)

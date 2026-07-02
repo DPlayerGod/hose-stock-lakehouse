@@ -7,6 +7,6 @@
         "typings"
     ],
     "ignore": [
-        "dags"
+        "dags", "streamlit_app"
     ]
 }

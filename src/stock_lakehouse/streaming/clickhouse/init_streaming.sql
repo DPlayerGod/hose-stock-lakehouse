@@ -50,8 +50,8 @@ CREATE TABLE IF NOT EXISTS lakehouse.kafka_ohlc
 )
 ENGINE = Kafka
 SETTINGS
-    kafka_broker_list         = 'kafka:9092',
-    kafka_topic_list          = 'dnse.ohlc',
+    kafka_broker_list         = '${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}',
+    kafka_topic_list          = '${KAFKA_TOPIC_OHLC:-dnse.ohlc}',
     kafka_group_name          = 'clickhouse_lakehouse_streaming',
     kafka_format              = 'JSONEachRow',
     kafka_num_consumers       = 1,
@@ -136,7 +136,11 @@ GROUP BY symbol, trading_date;
 
 -- ---------------------------------------------------------------
 -- 8. realtime_hose_stock_signal — Batch indicators + streaming price
---    Updated on every incoming candle via scheduled query
+--    NOTE: This table requires a corresponding MV (mv_rt_stock_signal) to be populated.
+--    The MV is not yet implemented — signals are computed on-the-fly in Streamlit via
+--    signal_snapshot_from_candles() instead of querying this table.
+--    To populate: create a MV that upserts per-symbol signal rows from rt_hose_ohlcv_1m.
+--    Deduplication: ReplacingMergeTree keeps latest signal per symbol
 -- ---------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS lakehouse.realtime_hose_stock_signal
 (
@@ -149,26 +153,13 @@ CREATE TABLE IF NOT EXISTS lakehouse.realtime_hose_stock_signal
     signal_type    String,   -- BULLISH / BEARISH / NEUTRAL
     created_at     DateTime64(3, 'Asia/Ho_Chi_Minh')
 )
-ENGINE = MergeTree()
-ORDER BY (symbol, created_at)
+ENGINE = ReplacingMergeTree(created_at)
+ORDER BY (symbol)
 TTL toDate(created_at) + INTERVAL 30 DAY;
 
 -- ---------------------------------------------------------------
--- 9. hose_alert_events — Alert history with severity
+-- 9. rt_hose_alerts — Alert history from Python Alert Detector
+--    Created dynamically by detector.py _ensure_rt_hose_alerts()
+--    ORDER BY (alert_time, symbol, rule_name) enables efficient dedup
+--    TTL: 90 days
 -- ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS lakehouse.hose_alert_events
-(
-    alert_time       DateTime64(3, 'Asia/Ho_Chi_Minh'),
-    symbol           LowCardinality(String),
-    rule_name        LowCardinality(String),   -- SINGLE / COMBINED
-    alert_type       String,                   -- PRICE_ABOVE_SMA20, COMBINED_PUMP_RISK, ...
-    severity         LowCardinality(String),   -- INFO / WARNING / CRITICAL
-    price            Float64,
-    indicator_value  Float64,
-    threshold        Float64,
-    deviation_pct   Float64,
-    message          String
-)
-ENGINE = MergeTree()
-ORDER BY (alert_time, symbol, rule_name)
-TTL toDate(alert_time) + INTERVAL 180 DAY;

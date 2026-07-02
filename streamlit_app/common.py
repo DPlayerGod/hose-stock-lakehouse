@@ -18,14 +18,9 @@ from stock_lakehouse.config import ClickHouseConfig
 logging.basicConfig(level=logging.WARNING)
 
 ICT = timezone(timedelta(hours=7))
-SYMBOLS = [
-    s.strip()
-    for s in os.getenv(
-        "SYMBOLS",
-        "ACB,BCM,BID,BVH,CTG,FPT,GAS,GVR,HDB,HPG,MBB,MSN,MWG,PLX,POW,SAB,SHB,SSB,SSI,STB,TCB,TPB,VCB,VHM,VIB,VIC,VJC,VNM,VPB,VRE",
-    ).split(",")
-    if s.strip()
-]
+# Batch pipeline chỉ xử lý 5 mã (giới hạn API free-tier vnstock).
+# Streamlit UI cũng giới hạn theo batch để đồng bộ.
+SYMBOLS = ["FPT", "VCB", "HPG", "VNM", "MWG"]
 REFRESH_SEC = int(os.getenv("DASHBOARD_REFRESH_SEC", "5"))
 
 UP_COLOR = "#26a69a"
@@ -91,7 +86,7 @@ STYLE_BLOCK = """
   .ha-soon-wrap { display: inline-flex; align-items: center; margin-left: 6px; }
   .ha-soon { font-size: .65rem; font-weight: 700; color: #92400e; background: #fef3c7; padding: 1px 8px; border-radius: 999px; border: 1.5px solid #f59e0b; line-height: 1.5; text-transform: uppercase; letter-spacing: .04em; vertical-align: middle; white-space: nowrap; }
   .ha-soon::before { content: "\\1F551"; margin-right: 3px; font-size: .7rem; }
-  .ha-ind { display: flex; justify-content: space-between; align-items: center; padding: 11px 12px; margin: 0 -12px; border-bottom: 1px solid #f1f5f9; border-radius: 8px; transition: background-color .15s ease; }
+  .ha-ind { display: flex; justify-content: space-between; align-items: center; padding: 11px 12px; margin: 0 -12px; border-bottom: 1px solid #f1f5f9; border-radius: 8px; transition: background-color .15s ease; position: relative; z-index: 1; }
   .ha-ind:hover { background-color: #f8fafc; }
   .ha-ind:last-child { border-bottom: none; }
   .ha-ind-name { color: #475569; font-size: .88rem; font-weight: 500; }
@@ -286,7 +281,7 @@ def load_latest_prices() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=10)
-def load_realtime_candles(symbol: str = "", minutes: int = 180, trading_day: date | None = None) -> pd.DataFrame:
+def load_realtime_candles(symbol: str = "", minutes: int = 180, trading_day: date | None = None, _cache_buster: str = "") -> pd.DataFrame:
     symbol_filter = "AND symbol = %(symbol)s" if symbol else ""
     day = trading_day or datetime.now(ICT).date()
     limit = max(1, minutes)
@@ -323,23 +318,12 @@ def load_intraday_vwap() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=30)
-def load_realtime_signals() -> pd.DataFrame:
-    return query_df(
-        """
-        SELECT symbol, latest_price, vwap, sma20, ema20, rsi14, signal_type, created_at
-        FROM realtime_hose_stock_signal
-        ORDER BY created_at DESC
-        LIMIT 5 BY symbol
-        """
-    )
-
-
 @st.cache_data(ttl=30)
 def load_realtime_alerts() -> pd.DataFrame:
     return query_df(
         """
         SELECT alert_time, symbol, alert_type, severity, price, indicator_value, deviation_pct, message
-        FROM hose_alert_events
+        FROM rt_hose_alerts
         ORDER BY alert_time DESC
         LIMIT 50
         """
@@ -369,14 +353,39 @@ def load_realtime_latency() -> dict:
     return {}
 
 
-def compute_rsi_series(closes: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
-    delta = pd.to_numeric(closes, errors="coerce").diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = (-delta).where(delta < 0, 0.0)
-    avg_gain = gain.rolling(window=period, min_periods=period).mean()
-    avg_loss = loss.rolling(window=period, min_periods=period).mean()
-    rs = avg_gain / avg_loss.replace(0, pd.NA)
-    return 100.0 - 100.0 / (1.0 + rs)
+def _rolling_wilder_rsi(closes: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
+    """Rolling Wilder's RSI — O(n) single-pass via incremental smoothing."""
+    n = len(closes)
+    result = pd.Series(index=closes.index, dtype=float)
+
+    if n < period + 1:
+        return result
+
+    deltas = closes.diff().iloc[1:]  # n-1 elements: gains/losses[i] = close[i+1] - close[i]
+    gains = deltas.clip(lower=0.0)
+    losses = (-deltas).clip(lower=0.0)
+
+    avg_gain = gains.iloc[:period].mean().item()
+    avg_loss = losses.iloc[:period].mean().item()
+
+    if avg_loss == 0:
+        result.iloc[period - 1] = 100.0
+    elif avg_gain == 0:
+        result.iloc[period - 1] = 0.0
+    else:
+        result.iloc[period - 1] = round(100.0 - 100.0 / (1.0 + avg_gain / avg_loss), 2)
+
+    for i in range(period, len(gains)):
+        avg_gain = ((period - 1) * avg_gain + gains.iloc[i].item()) / period
+        avg_loss = ((period - 1) * avg_loss + losses.iloc[i].item()) / period
+        if avg_loss == 0:
+            result.iloc[i + 1] = 100.0
+        elif avg_gain == 0:
+            result.iloc[i + 1] = 0.0
+        else:
+            result.iloc[i + 1] = round(100.0 - 100.0 / (1.0 + avg_gain / avg_loss), 2)
+
+    return result
 
 
 def enrich_realtime_candles(df: pd.DataFrame) -> pd.DataFrame:
@@ -393,7 +402,7 @@ def enrich_realtime_candles(df: pd.DataFrame) -> pd.DataFrame:
     out["vwap"] = cum_pv / cum_vol
     variance = (cum_p2v / cum_vol) - (out["vwap"] ** 2)
     out["sigma"] = variance.clip(lower=0).pow(0.5)
-    out["rsi14"] = compute_rsi_series(out["close"])
+    out["rsi14"] = _rolling_wilder_rsi(out["close"])
     out["sma20"] = out["close"].rolling(20, min_periods=1).mean()
     out["volume_avg20"] = volume.rolling(20, min_periods=1).mean()
     return out
@@ -486,7 +495,7 @@ def load_summary_realtime() -> dict:
     alerts = client().query(
         """
         SELECT count()
-        FROM hose_alert_events
+        FROM rt_hose_alerts
         WHERE toDate(alert_time, 'Asia/Ho_Chi_Minh') = toDate(now('Asia/Ho_Chi_Minh'))
         """
     ).result_rows
@@ -504,6 +513,65 @@ def load_last_price_realtime(symbol: str) -> float | None:
         parameters={"sym": symbol},
     ).result_rows
     return rows[0][0] if rows and rows[0][0] is not None else None
+
+
+@st.cache_data(ttl=3600)
+def is_trading_day(day) -> bool:
+    """True nếu `day` là ngày giao dịch (dim_date.is_day_off = False).
+
+    Trả về False nếu dim_date không có dòng cho ngày đó (vd quá khứ xa
+    chưa được build hoặc tương lai xa).
+    """
+    try:
+        from datetime import date as _date
+        d = day if isinstance(day, _date) else day.date()
+    except Exception:
+        return False
+
+    df = query_df(
+        """
+        SELECT is_day_off
+        FROM dim_date
+        WHERE full_date = %(day)s
+        LIMIT 1
+        """,
+        {"day": d},
+    )
+    if df.empty:
+        return False
+    return not bool(df.iloc[0, 0])
+
+
+@st.cache_data(ttl=3600)
+def previous_close_for(symbol: str, day) -> float | None:
+    """Close của phiên giao dịch liền kề trước `day` cho `symbol`.
+
+    `fact_hose_daily_market` không có cột ngày nghỉ, nên JOIN sang `dim_date`
+    để lọc `is_day_off = 0`. Trả về None nếu không tìm được phiên trước.
+    """
+    try:
+        from datetime import date as _date
+        d = day if isinstance(day, _date) else day.date()
+    except Exception:
+        return None
+
+    df = query_df(
+        """
+        SELECT f.close_price
+        FROM fact_hose_daily_market AS f
+        INNER JOIN dim_symbol AS s ON f.symbol_key = s.symbol_key
+        INNER JOIN dim_date   AS d ON f.date_key   = d.date_key
+        WHERE s.symbol = %(symbol)s
+          AND d.full_date < %(day)s
+          AND d.is_day_off = 0
+        ORDER BY d.full_date DESC
+        LIMIT 1
+        """,
+        {"symbol": symbol, "day": d},
+    )
+    if df.empty or df.iloc[0, 0] is None:
+        return None
+    return float(df.iloc[0, 0])
 
 
 @st.cache_data(ttl=60)
@@ -601,17 +669,25 @@ def build_multi_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
     )
     if df.empty:
         return _base_layout(fig, 750)
+    times_m = pd.to_datetime(df["candle_time"])
+    x_idx_m = [t.strftime("%H:%M") for t in times_m]
+    tick_step_m = max(1, len(df) // 8)
+    tick_pos_m = list(range(0, len(df), tick_step_m))
+    tick_lbl_m = [times_m.iloc[i].strftime("%H:%M") for i in tick_pos_m]  # noqa: F841
+
     fig.add_trace(
-        go.Scatter(x=df["candle_time"], y=df["close"], mode="lines", name="Price",
+        go.Scatter(x=x_idx_m, y=df["close"], mode="lines", name="Price",
                    xaxis="x", yaxis="y",
-                   line=dict(color="#0f172a", width=2)),
+                   line=dict(color="#0f172a", width=2),
+                   connectgaps=False),
         row=1, col=1,
     )
     if df["vwap"].notna().any():
         fig.add_trace(
-            go.Scatter(x=df["candle_time"], y=df["vwap"], mode="lines", name="VWAP",
+            go.Scatter(x=x_idx_m, y=df["vwap"], mode="lines", name="VWAP",
                        xaxis="x", yaxis="y",
-                       line=dict(color="#2563eb", width=2.5, dash="dash")),
+                       line=dict(color="#2563eb", width=2.5, dash="dash"),
+                       connectgaps=False),
             row=1, col=1,
         )
         k = BAND_SIGMA_MULTIPLIER
@@ -619,7 +695,7 @@ def build_multi_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
         lo = df["vwap"] - k * df["sigma"]
         fig.add_trace(
             go.Scatter(
-                x=pd.concat([df["candle_time"], df["candle_time"].iloc[::-1]]),
+                x=pd.concat([pd.Series(x_idx_m), pd.Series(x_idx_m[::-1])]),
                 y=pd.concat([hi, lo.iloc[::-1]]),
                 fill="toself", fillcolor="rgba(37, 99, 235, 0.08)",
                 line=dict(color="rgba(0,0,0,0)"), name=f"+/-{k:.0f} sigma", hoverinfo="skip",
@@ -629,16 +705,17 @@ def build_multi_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
         )
     if df["rsi14"].notna().any():
         fig.add_trace(
-            go.Scatter(x=df["candle_time"], y=df["rsi14"], mode="lines", name="RSI",
-                       xaxis="x2", yaxis="y2",
-                       line=dict(color="#9333ea", width=2)),
-            row=2, col=1,
-        )
-        x_min, x_max = df["candle_time"].min(), df["candle_time"].max()
+            go.Scatter(x=x_idx_m, y=df["rsi14"], mode="lines", name="RSI",
+                   xaxis="x2", yaxis="y2",
+                   line=dict(color="#9333ea", width=2),
+                   connectgaps=False),
+        row=2, col=1,
+    )
+        x_first, x_last = x_idx_m[0], x_idx_m[-1]
         for level, color, dash in ((70, DOWN_COLOR, "dash"), (30, UP_COLOR, "dash"), (50, "rgba(0,0,0,0.25)", "dot")):
             fig.add_trace(
                 go.Scatter(
-                    x=[x_min, x_max], y=[level, level], mode="lines",
+                    x=[x_first, x_last], y=[level, level], mode="lines",
                     xaxis="x2", yaxis="y2",
                     line=dict(color=color, width=1, dash=dash),
                     showlegend=False, hoverinfo="skip",
@@ -655,21 +732,27 @@ def build_multi_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
         else:
             vol_colors.append("rgba(100, 116, 139, 0.45)")
     fig.add_trace(
-        go.Bar(x=df["candle_time"], y=df["volume"], name="Volume",
+        go.Bar(x=x_idx_m, y=df["volume"], name="Volume",
                xaxis="x3", yaxis="y3",
                marker_color=vol_colors, marker_line_width=0),
         row=3, col=1,
     )
     fig.add_trace(
-        go.Scatter(x=df["candle_time"], y=vol_avg, mode="lines", name="Vol Avg",
+        go.Scatter(x=x_idx_m, y=vol_avg, mode="lines", name="Vol Avg",
                    xaxis="x3", yaxis="y3",
-                   line=dict(color="#ea580c", width=1.5, dash="dot")),
+                   line=dict(color="#ea580c", width=1.5, dash="dot"),
+                   connectgaps=False),
         row=3, col=1,
     )
     _base_layout(fig, 750)
+    # Categorical axis: coi mỗi nến là 1 category, tự bỏ khoảng trống giờ nghỉ trưa
     fig.update_xaxes(rangeslider_visible=False, row=1, col=1)
     fig.update_xaxes(rangeslider_visible=False, row=2, col=1)
     fig.update_xaxes(rangeslider_visible=False, row=3, col=1)
+    fig.update_xaxes(type="category", row=1, col=1)
+    fig.update_xaxes(type="category", row=2, col=1)
+    fig.update_xaxes(type="category", row=3, col=1,
+                     tickvals=tick_pos_m, ticktext=tick_lbl_m, hoverformat="")
     fig.update_yaxes(title_text="Giá", row=1, col=1)
     fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1)
     fig.update_yaxes(title_text="KL", row=3, col=1)
@@ -695,6 +778,10 @@ def build_candlestick_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
         return _base_layout(fig, 520)
 
     times = pd.to_datetime(df["candle_time"])
+    x_idx = [t.strftime("%H:%M") for t in times]
+    tick_step = max(1, len(df) // 8)
+    tick_positions = list(range(0, len(df), tick_step))
+    tick_labels = [times.iloc[i].strftime("%H:%M") for i in tick_positions]
     opens = pd.to_numeric(df["open"], errors="coerce")
     highs = pd.to_numeric(df["high"], errors="coerce")
     lows = pd.to_numeric(df["low"], errors="coerce")
@@ -703,7 +790,7 @@ def build_candlestick_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
     # ─── Row 1: Nến giá ──────────────────────────────────────────────────────────
     fig.add_trace(
         go.Candlestick(
-            x=times, open=opens, high=highs, low=lows, close=closes,
+            x=x_idx, open=opens, high=highs, low=lows, close=closes,
             name="Giá",
             increasing=dict(line=dict(color=UP_COLOR), fillcolor=UP_COLOR),
             decreasing=dict(line=dict(color=DOWN_COLOR), fillcolor=DOWN_COLOR),
@@ -716,8 +803,9 @@ def build_candlestick_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
     if "ema20" in df.columns and df["ema20"].notna().any():
         fig.add_trace(
             go.Scatter(
-                x=times, y=df["ema20"], name="EMA20",
+                x=x_idx, y=df["ema20"], name="EMA20",
                 line=dict(color=EMA_COLOR, width=1.4, dash="dot"),
+                connectgaps=False,
             ),
             row=1, col=1,
         )
@@ -726,8 +814,9 @@ def build_candlestick_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
     if "sma20" in df.columns and df["sma20"].notna().any():
         fig.add_trace(
             go.Scatter(
-                x=times, y=df["sma20"], name="SMA20",
+                x=x_idx, y=df["sma20"], name="SMA20",
                 line=dict(color="#ef4444", width=1.4),
+                connectgaps=False,
             ),
             row=1, col=1,
         )
@@ -736,17 +825,32 @@ def build_candlestick_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
     if "vwap" in df.columns and df["vwap"].notna().any():
         fig.add_trace(
             go.Scatter(
-                x=times, y=df["vwap"], name="VWAP",
+                x=x_idx, y=df["vwap"], name="VWAP",
                 line=dict(color="#2563eb", width=2, dash="dash"),
+                connectgaps=False,
             ),
             row=1, col=1,
         )
+        k = BAND_SIGMA_MULTIPLIER
+        if "sigma" in df.columns and df["sigma"].notna().any():
+            hi = df["vwap"] + k * df["sigma"]
+            lo = df["vwap"] - k * df["sigma"]
+            fig.add_trace(
+                go.Scatter(
+                    x=pd.concat([pd.Series(x_idx), pd.Series(x_idx[::-1])]),
+                    y=pd.concat([hi.reset_index(drop=True), lo.iloc[::-1].reset_index(drop=True)]),
+                    fill="toself", fillcolor="rgba(37, 99, 235, 0.08)",
+                    line=dict(color="rgba(0,0,0,0)"), name=f"+/-{k:.0f}\u03c3",
+                    hoverinfo="skip", connectgaps=False,
+                ),
+                row=1, col=1,
+            )
 
     # ─── Row 2: Volume bar ───────────────────────────────────────────────────────
     vol_colors = [UP_COLOR if c >= o else DOWN_COLOR for c, o in zip(closes, opens)]
     fig.add_trace(
         go.Bar(
-            x=times, y=df["volume"], marker_color=vol_colors,
+            x=x_idx, y=df["volume"], marker_color=vol_colors,
             name="Khối lượng", showlegend=False,
         ),
         row=2, col=1,
@@ -775,13 +879,25 @@ def build_candlestick_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
         pad = (pmax - pmin) * 0.08
         fig.update_yaxes(range=[pmin - pad, pmax + pad], row=1, col=1)
 
-    # ─── Rangebreaks: bỏ khoảng trống cuối tuần + nghỉ lễ ───────────────────────
+    # ─── Rangebreaks: bỏ khoảng trống cuối tuần + nghỉ lễ ──────
+    # Giờ nghỉ trưa 11:30-13:00 ICT = 04:30-06:00 UTC
     present = times
     present_set = set(present.dt.normalize())
     if len(present_set) > 1:
         full = pd.date_range(present.min(), present.max(), freq="D")
         holidays = [d for d in full if d.weekday() < 5 and d not in present_set]
-        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(values=holidays)])
+        fig.update_xaxes(
+            rangebreaks=[
+                dict(bounds=["sat", "mon"]),
+                dict(values=holidays),
+            ]
+        )
+    fig.update_xaxes(type="category", row=1, col=1,
+                     tickvals=tick_positions, ticktext=tick_labels,
+                     hoverformat="")
+    fig.update_xaxes(type="category", row=2, col=1,
+                     tickvals=tick_positions, ticktext=tick_labels,
+                     hoverformat="")
 
     return fig
 
@@ -793,6 +909,11 @@ def build_realtime_bar_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
     )
     if df.empty:
         return _base_layout(fig, 600)
+    times_rt = pd.to_datetime(df["candle_time"])
+    x_idx_rt = [t.strftime("%H:%M") for t in times_rt]
+    tick_step_rt = max(1, len(df) // 8)
+    tick_pos_rt = list(range(0, len(df), tick_step_rt))
+    tick_lbl_rt = [times_rt.iloc[i].strftime("%H:%M") for i in tick_pos_rt]
     opens = pd.to_numeric(df["open"], errors="coerce")
     highs = pd.to_numeric(df["high"], errors="coerce")
     lows = pd.to_numeric(df["low"], errors="coerce")
@@ -800,7 +921,7 @@ def build_realtime_bar_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
     bar_colors = [UP_COLOR if closes.iloc[i] >= opens.iloc[i] else DOWN_COLOR for i in range(len(df))]
     fig.add_trace(
         go.Ohlc(
-            x=df["candle_time"],
+            x=x_idx_rt,
             open=opens, high=highs, low=lows, close=closes,
             name="OHLC",
             xaxis="x", yaxis="y",
@@ -812,34 +933,39 @@ def build_realtime_bar_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
     )
     if "sma20" in df.columns and df["sma20"].notna().any():
         fig.add_trace(
-            go.Scatter(x=df["candle_time"], y=df["sma20"], mode="lines", name="SMA(20)",
+            go.Scatter(x=x_idx_rt, y=df["sma20"], mode="lines", name="SMA(20)",
                        xaxis="x", yaxis="y",
-                       line=dict(color="#ef4444", width=2.5)),
+                       line=dict(color="#ef4444", width=2.5), connectgaps=False),
             row=1, col=1,
         )
     if "vwap" in df.columns and df["vwap"].notna().any():
         fig.add_trace(
-            go.Scatter(x=df["candle_time"], y=df["vwap"], mode="lines", name="VWAP",
+            go.Scatter(x=x_idx_rt, y=df["vwap"], mode="lines", name="VWAP",
                        xaxis="x", yaxis="y",
-                       line=dict(color="#2563eb", width=2.5, dash="dash")),
+                       line=dict(color="#2563eb", width=2.5, dash="dash"), connectgaps=False),
             row=1, col=1,
         )
     vol_avg = pd.to_numeric(df["volume"], errors="coerce").rolling(20, min_periods=1).mean()
     fig.add_trace(
-        go.Bar(x=df["candle_time"], y=df["volume"], name="Volume",
+        go.Bar(x=x_idx_rt, y=df["volume"], name="Volume",
                xaxis="x2", yaxis="y2",
                marker_color=bar_colors, marker_line_width=0),
         row=2, col=1,
     )
     fig.add_trace(
-        go.Scatter(x=df["candle_time"], y=vol_avg, mode="lines", name="Vol Avg",
+        go.Scatter(x=x_idx_rt, y=vol_avg, mode="lines", name="Vol Avg",
                    xaxis="x2", yaxis="y2",
-                   line=dict(color="#ea580c", width=1.5, dash="dot")),
+                   line=dict(color="#ea580c", width=1.5, dash="dot"), connectgaps=False),
         row=2, col=1,
     )
     _base_layout(fig, 600)
+    # Categorical axis: coi mỗi nến là 1 category, tự bỏ khoảng trống giờ nghỉ trưa
     fig.update_xaxes(rangeslider_visible=False, row=1, col=1)
     fig.update_xaxes(rangeslider_visible=False, row=2, col=1)
+    fig.update_xaxes(type="category", row=1, col=1,
+                     tickvals=tick_pos_rt, ticktext=tick_lbl_rt, hoverformat="")
+    fig.update_xaxes(type="category", row=2, col=1,
+                     tickvals=tick_pos_rt, ticktext=tick_lbl_rt, hoverformat="")
     fig.update_yaxes(title_text="Giá", row=1, col=1)
     fig.update_yaxes(title_text="KL", row=2, col=1)
     price_min = lows.min()
@@ -869,10 +995,3 @@ def latency_distribution_figure(df: pd.DataFrame) -> go.Figure:
     fig.update_layout(title=dict(text="Latency distribution", font=dict(size=16, color="#1e293b")), showlegend=False, xaxis=dict(title="Khoảng latency"))
     fig.update_yaxes(title="Số messages")
     return fig
-
-
-def eod_realtime_fallback_figure(df: pd.DataFrame, symbol: str) -> go.Figure:
-    if df.empty:
-        return _base_layout(make_subplots(rows=3, cols=1), 560)
-    work = df.rename(columns={"trading_date": "candle_time", "latest_price": "close", "latest_quantity": "volume"}).copy()
-    return build_multi_chart(enrich_realtime_candles(work), symbol)

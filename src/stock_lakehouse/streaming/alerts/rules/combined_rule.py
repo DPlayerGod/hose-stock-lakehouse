@@ -1,0 +1,198 @@
+"""
+CombinedSignalRule — Cảnh báo kết hợp VWAP + RSI + Volume Spike.
+
+Chỉ fire khi ≥ 2 tín hiệu đồng thuận → giảm false alarm, tăng chất lượng.
+
+Bảng tổ hợp:
+┌────────────────┬──────────┬────────────┬─────────────────────┬──────────┐
+│ VWAP           │ RSI      │ Volume     │ Alert               │ Severity │
+├────────────────┼──────────┼────────────┼─────────────────────┼──────────┤
+│ Breakout ↑     │ > 70     │ Spike ≥ 3x │ COMBINED_PUMP_RISK  │ CRITICAL │
+│ Breakdown ↓    │ < 30     │ Spike ≥ 3x │ COMBINED_PANIC_SELL │ CRITICAL │
+│ Breakout ↑     │ > 70     │ Bình thường│ COMBINED_OVERBOUGHT │ WARNING  │
+│ Breakdown ↓    │ < 30     │ Bình thường│ COMBINED_OVERSOLD   │ WARNING  │
+│ Trong band     │ 30-70    │ Spike ≥ 3x │ COMBINED_UNUSUAL_VOL │ WARNING │
+└────────────────┴──────────┴────────────┴─────────────────────┴──────────┘
+"""
+
+import logging
+from datetime import datetime
+from typing import Optional
+
+from ..models import Alert
+from ..candle_buffer import CandleBuffer
+from ..vwap import VWAPCalculator
+from ..indicators.rsi import compute_wilder_rsi as compute_rsi
+from ..indicators.volume import compute_volume_ratio
+from .base import BaseAlertRule
+
+logger = logging.getLogger('alerts.rules.combined')
+
+
+class CombinedSignalRule(BaseAlertRule):
+    """Cảnh báo kết hợp đa tín hiệu: VWAP × RSI × Volume."""
+
+    RULE_NAME = "COMBINED"
+
+    def __init__(self, config, vwap_calc: VWAPCalculator):
+        cooldown = getattr(config, 'ALERT_COOLDOWN_SEC', 300)
+        super().__init__(config, cooldown_sec=cooldown)
+        self.calc = vwap_calc
+
+        self.band_mode = getattr(config, 'ALERT_BAND_MODE', 'sigma')
+        self.threshold_pct = getattr(config, 'ALERT_THRESHOLD_PCT', 1.5)
+        self.sigma_k = float(getattr(config, 'BAND_SIGMA_MULTIPLIER', 2.0))
+
+        self.rsi_period = int(getattr(config, 'RSI_PERIOD', 14))
+        self.rsi_overbought = float(getattr(config, 'RSI_OVERBOUGHT', 70))
+        self.rsi_oversold = float(getattr(config, 'RSI_OVERSOLD', 30))
+
+        self.vol_lookback = int(getattr(config, 'VOLUME_LOOKBACK', 20))
+        self.vol_spike_ratio = float(getattr(config, 'VOLUME_SPIKE_RATIO', 3.0))
+
+    def evaluate(
+        self,
+        symbol: str,
+        price: float,
+        ts: datetime,
+        buffer: CandleBuffer,
+    ) -> Optional[Alert]:
+        vwap_state = self._get_vwap_state(symbol, price, ts)
+
+        closes = buffer.get_closes(symbol, n=None)
+        rsi = compute_rsi(closes, period=self.rsi_period)
+
+        volumes = buffer.get_volumes(symbol, n=self.vol_lookback + 1)
+        vol_ratio = compute_volume_ratio(volumes, lookback=self.vol_lookback)
+
+        is_breakout = (vwap_state == 'BREAKOUT')
+        is_breakdown = (vwap_state == 'BREAKDOWN')
+        is_overbought = (rsi is not None and rsi >= self.rsi_overbought)
+        is_oversold = (rsi is not None and rsi <= self.rsi_oversold)
+        is_vol_spike = (vol_ratio is not None and vol_ratio >= self.vol_spike_ratio)
+
+        alert = None
+
+        if is_breakout and is_overbought and is_vol_spike:
+            alert = self._build(
+                symbol, price, ts,
+                alert_type='COMBINED_PUMP_RISK',
+                severity='CRITICAL',
+                indicator_value=rsi or 0,
+                threshold=self.rsi_overbought,
+                message=(
+                    f"{symbol} RỦI RO ĐẨY GIÁ — "
+                    f"Breakout VWAP + RSI={rsi:.0f} (quá mua) + KL {vol_ratio:.1f}x"
+                ),
+            )
+
+        elif is_breakdown and is_oversold and is_vol_spike:
+            alert = self._build(
+                symbol, price, ts,
+                alert_type='COMBINED_PANIC_SELL',
+                severity='CRITICAL',
+                indicator_value=rsi or 0,
+                threshold=self.rsi_oversold,
+                message=(
+                    f"{symbol} BÁN THÁO — "
+                    f"Breakdown VWAP + RSI={rsi:.0f} (quá bán) + KL {vol_ratio:.1f}x"
+                ),
+            )
+
+        elif is_breakout and is_overbought:
+            alert = self._build(
+                symbol, price, ts,
+                alert_type='COMBINED_OVERBOUGHT_BREAKOUT',
+                severity='WARNING',
+                indicator_value=rsi or 0,
+                threshold=self.rsi_overbought,
+                message=(
+                    f"{symbol} Breakout VWAP + RSI={rsi:.0f} (quá mua) — cẩn trọng"
+                ),
+            )
+
+        elif is_breakdown and is_oversold:
+            alert = self._build(
+                symbol, price, ts,
+                alert_type='COMBINED_OVERSOLD_BREAKDOWN',
+                severity='WARNING',
+                indicator_value=rsi or 0,
+                threshold=self.rsi_oversold,
+                message=(
+                    f"{symbol} Breakdown VWAP + RSI={rsi:.0f} (quá bán) — có thể là cơ hội"
+                ),
+            )
+
+        elif is_vol_spike and not is_breakout and not is_breakdown:
+            alert = self._build(
+                symbol, price, ts,
+                alert_type='COMBINED_UNUSUAL_VOLUME',
+                severity='WARNING',
+                indicator_value=vol_ratio or 0,
+                threshold=self.vol_spike_ratio,
+                message=(
+                    f"{symbol} KL đột biến {vol_ratio:.1f}x — "
+                    f"RSI={f'{rsi:.0f}' if rsi else '?'}, giá trong band VWAP"
+                ),
+            )
+
+        elif (is_breakout or is_breakdown) and is_vol_spike:
+            direction = "Breakout ↑" if is_breakout else "Breakdown ↓"
+            alert = self._build(
+                symbol, price, ts,
+                alert_type='COMBINED_VOLUME_BREAKOUT' if is_breakout else 'COMBINED_VOLUME_BREAKDOWN',
+                severity='WARNING',
+                indicator_value=vol_ratio or 0,
+                threshold=self.vol_spike_ratio,
+                message=(
+                    f"{symbol} {direction} VWAP + KL {vol_ratio:.1f}x — "
+                    f"RSI={f'{rsi:.0f}' if rsi else '?'}"
+                ),
+            )
+
+        return alert
+
+    def _get_vwap_state(self, symbol: str, price: float, ts: datetime) -> str:
+        """Trả về 'BREAKOUT', 'BREAKDOWN', hoặc 'IN_BAND'."""
+        s_vwap, s_sigma = self.calc.get_session_vwap_and_sigma(symbol, ts)
+        if not s_vwap or s_vwap <= 0:
+            return 'IN_BAND'
+
+        if self.band_mode == 'pct':
+            deviation_pct = (price - s_vwap) / s_vwap * 100
+            if deviation_pct > self.threshold_pct:
+                return 'BREAKOUT'
+            if deviation_pct < -self.threshold_pct:
+                return 'BREAKDOWN'
+            return 'IN_BAND'
+
+        if not s_sigma or s_sigma <= 0:
+            return 'IN_BAND'
+        upper = s_vwap + self.sigma_k * s_sigma
+        lower = s_vwap - self.sigma_k * s_sigma
+        if price > upper:
+            return 'BREAKOUT'
+        if price < lower:
+            return 'BREAKDOWN'
+        return 'IN_BAND'
+
+    def _build(
+        self, symbol: str, price: float, ts: datetime,
+        alert_type: str, severity: str,
+        indicator_value: float, threshold: float,
+        message: str,
+    ) -> Optional[Alert]:
+        if not self._can_fire(symbol, alert_type, ts):
+            return None
+        self._mark_fired(symbol, alert_type, ts)
+
+        s_vwap = self.calc.get_session_vwap(symbol, ts) or 0
+        deviation_pct = ((price - s_vwap) / s_vwap * 100) if s_vwap > 0 else 0
+
+        return Alert(
+            alert_time=ts, symbol=symbol,
+            rule_name=self.RULE_NAME, alert_type=alert_type,
+            severity=severity, price=price,
+            indicator_value=indicator_value, threshold=threshold,
+            deviation_pct=deviation_pct, message=message,
+        )

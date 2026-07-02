@@ -98,7 +98,16 @@ async def run(config: StreamingConfig) -> None:
 
         message = _build_message(ohlc)
         try:
-            producer.send(config.kafka_ohlc_topic, value=message)
+            future = producer.send(config.kafka_ohlc_topic, value=message)
+
+            def _on_error(exc: BaseException) -> None:
+                stats["errors"] += 1
+                logger.error(
+                    "[%s] Kafka delivery failed: %s — symbol=%s price=%.2f",
+                    ohlc.symbol, exc, ohlc.symbol, ohlc.close,
+                )
+
+            future.add_errback(_on_error)
             stats["sent"] += 1
             if stats["sent"] % 200 == 0:
                 logger.info(

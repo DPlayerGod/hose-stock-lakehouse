@@ -20,6 +20,7 @@ vnstock
 holidays
 requests
 plotly
+kafka-python
 
 # Serving database
 clickhouse-connect

@@ -5,6 +5,10 @@ addopts = "-q -p no:cacheprovider"
 markers = [
     "integration: requires Docker Compose services (MinIO, Iceberg REST, etc.)",
 ]
+filterwarnings = [
+    "ignore::DeprecationWarning:importlib",
+    "ignore::DeprecationWarning:_bootstrap",
+]
 
 [tool.pyright]
 venvPath = "."
