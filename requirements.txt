@@ -12,6 +12,8 @@ botocore==1.43.0
 s3fs==2026.4.0
 aiobotocore==3.7.0
 fsspec==2026.4.0
+# MinIO client (used by streaming/tools/minio_exporter.py + Airflow DAG backup)
+minio
 
 # Data quality: validate bằng Polars (xem data_quality.md) — không cần thư viện ngoài
 
