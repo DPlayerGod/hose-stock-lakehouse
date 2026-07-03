@@ -287,10 +287,10 @@ def load_realtime_candles(symbol: str = "", minutes: int = 180, trading_day: dat
     limit = max(1, minutes)
     df = query_df(
         f"""
-        SELECT candle_time, symbol, open, high, low, close, volume
+        SELECT candle_time, symbol, open, high, low, close, volume, vwap, sigma, rsi14, volume_ratio
         FROM (
-            SELECT candle_time, symbol, open, high, low, close, volume
-            FROM rt_hose_ohlcv_1m
+            SELECT candle_time, symbol, open, high, low, close, volume, vwap, sigma, rsi14, volume_ratio
+            FROM rt_hose_indicators
             WHERE toDate(candle_time, 'Asia/Ho_Chi_Minh') = %(trading_day)s
               {symbol_filter}
             ORDER BY candle_time DESC
@@ -318,14 +318,15 @@ def load_intraday_vwap() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=30)
-@st.cache_data(ttl=30)
-def load_realtime_alerts() -> pd.DataFrame:
+def load_realtime_alerts(symbol: str | None = None, limit: int = 50) -> pd.DataFrame:
+    symbol_filter = f"AND symbol = '{symbol}'" if symbol else ""
     return query_df(
-        """
+        f"""
         SELECT alert_time, symbol, alert_type, severity, price, indicator_value, deviation_pct, message
         FROM rt_hose_alerts
+        WHERE 1=1 {symbol_filter}
         ORDER BY alert_time DESC
-        LIMIT 50
+        LIMIT {limit}
         """
     )
 
@@ -353,58 +354,18 @@ def load_realtime_latency() -> dict:
     return {}
 
 
-def _rolling_wilder_rsi(closes: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
-    """Rolling Wilder's RSI — O(n) single-pass via incremental smoothing."""
-    n = len(closes)
-    result = pd.Series(index=closes.index, dtype=float)
-
-    if n < period + 1:
-        return result
-
-    deltas = closes.diff().iloc[1:]  # n-1 elements: gains/losses[i] = close[i+1] - close[i]
-    gains = deltas.clip(lower=0.0)
-    losses = (-deltas).clip(lower=0.0)
-
-    avg_gain = gains.iloc[:period].mean().item()
-    avg_loss = losses.iloc[:period].mean().item()
-
-    if avg_loss == 0:
-        result.iloc[period - 1] = 100.0
-    elif avg_gain == 0:
-        result.iloc[period - 1] = 0.0
-    else:
-        result.iloc[period - 1] = round(100.0 - 100.0 / (1.0 + avg_gain / avg_loss), 2)
-
-    for i in range(period, len(gains)):
-        avg_gain = ((period - 1) * avg_gain + gains.iloc[i].item()) / period
-        avg_loss = ((period - 1) * avg_loss + losses.iloc[i].item()) / period
-        if avg_loss == 0:
-            result.iloc[i + 1] = 100.0
-        elif avg_gain == 0:
-            result.iloc[i + 1] = 0.0
-        else:
-            result.iloc[i + 1] = round(100.0 - 100.0 / (1.0 + avg_gain / avg_loss), 2)
-
-    return result
-
-
 def enrich_realtime_candles(df: pd.DataFrame) -> pd.DataFrame:
+    """Enrich candles with derived columns (indicators already in rt_hose_indicators)."""
     if df.empty:
         return df
-    out = df.sort_values("candle_time").copy()
+    out = df.copy()
     for col in ("open", "high", "low", "close", "volume"):
-        out[col] = pd.to_numeric(out[col], errors="coerce")
-    typical = (out["high"] + out["low"] + out["close"]) / 3.0
-    volume = out["volume"].fillna(0)
-    cum_vol = volume.cumsum().replace(0, pd.NA)
-    cum_pv = (typical * volume).cumsum()
-    cum_p2v = ((typical ** 2) * volume).cumsum()
-    out["vwap"] = cum_pv / cum_vol
-    variance = (cum_p2v / cum_vol) - (out["vwap"] ** 2)
-    out["sigma"] = variance.clip(lower=0).pow(0.5)
-    out["rsi14"] = _rolling_wilder_rsi(out["close"])
-    out["sma20"] = out["close"].rolling(20, min_periods=1).mean()
-    out["volume_avg20"] = volume.rolling(20, min_periods=1).mean()
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    if "sma20" not in out.columns:
+        out["sma20"] = out["close"].rolling(20, min_periods=1).mean()
+    if "volume_avg20" not in out.columns:
+        out["volume_avg20"] = out["volume"].fillna(0).rolling(20, min_periods=1).mean()
     return out
 
 
@@ -682,7 +643,7 @@ def build_multi_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
                    connectgaps=False),
         row=1, col=1,
     )
-    if df["vwap"].notna().any():
+    if "vwap" in df.columns and df["vwap"].notna().any():
         fig.add_trace(
             go.Scatter(x=x_idx_m, y=df["vwap"], mode="lines", name="VWAP",
                        xaxis="x", yaxis="y",
@@ -690,20 +651,21 @@ def build_multi_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
                        connectgaps=False),
             row=1, col=1,
         )
-        k = BAND_SIGMA_MULTIPLIER
-        hi = df["vwap"] + k * df["sigma"]
-        lo = df["vwap"] - k * df["sigma"]
-        fig.add_trace(
-            go.Scatter(
-                x=pd.concat([pd.Series(x_idx_m), pd.Series(x_idx_m[::-1])]),
-                y=pd.concat([hi, lo.iloc[::-1]]),
-                fill="toself", fillcolor="rgba(37, 99, 235, 0.08)",
-                line=dict(color="rgba(0,0,0,0)"), name=f"+/-{k:.0f} sigma", hoverinfo="skip",
-                xaxis="x", yaxis="y",
-            ),
-            row=1, col=1,
-        )
-    if df["rsi14"].notna().any():
+        if "sigma" in df.columns and df["sigma"].notna().any():
+            k = BAND_SIGMA_MULTIPLIER
+            hi = df["vwap"] + k * df["sigma"]
+            lo = df["vwap"] - k * df["sigma"]
+            fig.add_trace(
+                go.Scatter(
+                    x=pd.concat([pd.Series(x_idx_m), pd.Series(x_idx_m[::-1])]),
+                    y=pd.concat([hi, lo.iloc[::-1]]),
+                    fill="toself", fillcolor="rgba(37, 99, 235, 0.08)",
+                    line=dict(color="rgba(0,0,0,0)"), name=f"+/-{k:.0f} sigma", hoverinfo="skip",
+                    xaxis="x", yaxis="y",
+                ),
+                row=1, col=1,
+            )
+    if "rsi14" in df.columns and df["rsi14"].notna().any():
         fig.add_trace(
             go.Scatter(x=x_idx_m, y=df["rsi14"], mode="lines", name="RSI",
                    xaxis="x2", yaxis="y2",

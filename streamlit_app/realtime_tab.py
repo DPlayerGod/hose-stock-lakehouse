@@ -3,24 +3,36 @@ from __future__ import annotations
 from common import *
 
 
-def aggregate_intraday_candles(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
-    if df.empty or timeframe == "1 phút":
-        return df
-    freq_map = {"5 phút": "5min", "15 phút": "15min"}
-    freq = freq_map.get(timeframe)
-    if not freq:
-        return df
+def _fmt_ms(ms: float | int | None) -> str:
+    """Format latency ms: <1000 -> '850ms', >=1000 -> '1.25s', >=60000 -> '2.10m'."""
+    if ms is None:
+        return "-"
+    try:
+        v = float(ms)
+    except (TypeError, ValueError):
+        return "-"
+    if pd.isna(v):
+        return "-"
+    if v >= 60_000:
+        return f"{v / 60_000:.2f}m"
+    if v >= 1_000:
+        return f"{v / 1_000:.2f}s"
+    return f"{v:.0f}ms"
 
-    work = df.sort_values("candle_time").copy().set_index("candle_time")
-    grouped = work.resample(freq).agg(
-        symbol=("symbol", "last"),
-        open=("open", "first"),
-        high=("high", "max"),
-        low=("low", "min"),
-        close=("close", "last"),
-        volume=("volume", "sum"),
-    )
-    return grouped.dropna(subset=["open", "high", "low", "close"]).reset_index()
+
+def _fmt_count(n: int | float | None) -> str:
+    """Format số lượng lớn: 1234 -> '1.2K', 1_500_000 -> '1.5M'."""
+    if n is None:
+        return "-"
+    try:
+        v = float(n)
+    except (TypeError, ValueError):
+        return "-"
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:.1f}M"
+    if v >= 1_000:
+        return f"{v / 1_000:.1f}K"
+    return f"{int(v)}"
 
 
 def realtime_symbol_options(latest_prices: pd.DataFrame) -> list[str]:
@@ -79,18 +91,27 @@ def render_realtime_view() -> None:
         st.info("Chưa có dữ liệu realtime. Kiểm tra Kafka, OHLC producer và DDL streaming.")
         return
 
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stMetric"] { padding: 8px 12px !important; }
+        div[data-testid="stMetricLabel"] > div > div > p { font-size: 0.8rem !important; }
+        div[data-testid="stMetricValue"] > div { font-size: 1.25rem !important; line-height: 1.1 !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.markdown("#### Realtime")
     options = realtime_symbol_options(latest_prices)
     default_symbol = options[0] if options else SYMBOLS[0]
     default_index = options.index(default_symbol) if default_symbol in options else 0
 
-    ctrl_symbol, ctrl_date, ctrl_tf, ctrl_chart = st.columns([1.3, 1, 1, 1.2])
+    ctrl_symbol, ctrl_date, ctrl_chart = st.columns([1.3, 1, 1.2])
     with ctrl_symbol:
         rt_symbol = st.selectbox("Mã CK", options or SYMBOLS, index=default_index, key="rt_symbol")
     with ctrl_date:
         selected_day = st.date_input("Ngày", value=today_date, key="rt_trading_day")
-    with ctrl_tf:
-        rt_timeframe = st.selectbox("Khung nến", ["1 phút", "5 phút", "15 phút"], key="rt_timeframe")
     with ctrl_chart:
         chart_style = st.selectbox("Kiểu biểu đồ", ["Nến", "Multi indicator"], key="rt_chart_style")
 
@@ -117,8 +138,6 @@ def render_realtime_view() -> None:
         cache_buster = f"{selected_day.isoformat()}_{rt_start_time.isoformat()}"
         candles_raw = load_realtime_candles(rt_symbol, candle_count * 20, selected_day, cache_buster)
         if not candles_raw.empty:
-            candles_raw = aggregate_intraday_candles(candles_raw, rt_timeframe)
-            # Tính RSI trên toàn bộ data TRƯỚC khi filter theo thời gian
             sym_candles = enrich_realtime_candles(candles_raw)
             # Filter theo thời gian bắt đầu (phải đủ nến cho RSI trước start_dt)
             if rt_start_time:
@@ -151,7 +170,7 @@ def render_realtime_view() -> None:
             c1.metric("Giá", vn_dec(last_price, 2), fmt_pct(pct))
             c2.metric("Khối lượng", vn_int(total_volume))
 
-            st.markdown(f"**{rt_symbol}** - {rt_timeframe} ({selected_day:%d/%m/%Y})")
+            st.markdown(f"**{rt_symbol}** - 1 phút ({selected_day:%d/%m/%Y})")
             if chart_style == "Nến":
                 fig = build_candlestick_chart(sym_candles, rt_symbol)
             elif chart_style == "Multi indicator":
@@ -184,14 +203,16 @@ def render_realtime_view() -> None:
             st.caption("Tính từ nến realtime.")
             st.dataframe(computed_signal, use_container_width=True, hide_index=True)
 
-        alerts = load_realtime_alerts()
+        alerts = load_realtime_alerts(symbol=rt_symbol, limit=50)
         if not alerts.empty:
-            st.markdown("**Recent alerts**")
+            st.markdown(f"**Recent alerts — {rt_symbol}**")
             display_cols = [
                 c for c in ["alert_time", "symbol", "alert_type", "severity", "price", "indicator_value", "deviation_pct", "message"]
                 if c in alerts.columns
             ]
             st.dataframe(alerts[display_cols].head(20), use_container_width=True, hide_index=True)
+        else:
+            st.caption(f"Chưa có alert nào cho {rt_symbol} trong phiên.")
 
     with tab_latency:
         if not realtime_today:
@@ -204,12 +225,12 @@ def render_realtime_view() -> None:
             total_today = summary.get("candles", 0)
 
             m1, m2, m3, m4, m5, m6 = st.columns(6)
-            m1.metric("Current", f"{current['latency_ms']:.0f}ms" if current else "-")
-            m2.metric("Avg", f"{summary_lat.get('avg', 0):.0f}ms" if summary_lat else "-")
-            m3.metric("p95", f"{summary_lat.get('p95', 0):.0f}ms" if summary_lat else "-")
-            m4.metric("p99", f"{summary_lat.get('p99', 0):.0f}ms" if summary_lat else "-")
+            m1.metric("Current", _fmt_ms(current['latency_ms']) if current else "-")
+            m2.metric("Avg", _fmt_ms(summary_lat.get('avg', 0)) if summary_lat else "-")
+            m3.metric("p95", _fmt_ms(summary_lat.get('p95', 0)) if summary_lat else "-")
+            m4.metric("p99", _fmt_ms(summary_lat.get('p99', 0)) if summary_lat else "-")
             m5.metric("Msgs/s", f"{throughput:.1f}")
-            m6.metric("Total", f"{total_today:,}")
+            m6.metric("Total", _fmt_count(total_today))
 
             st.divider()
 

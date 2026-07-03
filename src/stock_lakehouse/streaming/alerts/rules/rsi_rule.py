@@ -11,8 +11,6 @@ from datetime import datetime
 from typing import Optional
 
 from ..models import Alert
-from ..candle_buffer import CandleBuffer
-from ..indicators.rsi import compute_wilder_rsi as compute_rsi
 from .base import BaseAlertRule
 
 logger = logging.getLogger('alerts.rules.rsi')
@@ -26,7 +24,6 @@ class RSIRule(BaseAlertRule):
     def __init__(self, config):
         cooldown = getattr(config, 'ALERT_COOLDOWN_SEC', 300)
         super().__init__(config, cooldown_sec=cooldown)
-        self.period = int(getattr(config, 'RSI_PERIOD', 14))
         self.overbought = float(getattr(config, 'RSI_OVERBOUGHT', 70))
         self.oversold = float(getattr(config, 'RSI_OVERSOLD', 30))
 
@@ -35,10 +32,11 @@ class RSIRule(BaseAlertRule):
         symbol: str,
         price: float,
         ts: datetime,
-        buffer: CandleBuffer,
+        rsi: Optional[float] = None,
+        volume_ratio: Optional[float] = None,
+        vwap: Optional[float] = None,
+        sigma: Optional[float] = None,
     ) -> Optional[Alert]:
-        closes = buffer.get_closes(symbol, n=self.period + 1)
-        rsi = compute_rsi(closes, period=self.period)
         if rsi is None:
             return None
 

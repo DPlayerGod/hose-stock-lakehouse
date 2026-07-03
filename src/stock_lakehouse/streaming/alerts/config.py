@@ -40,7 +40,7 @@ class Config:
     # --- Runtime ---
     POLL_INTERVAL_SEC: int = int(os.getenv('POLL_INTERVAL_SEC', 10))
     ALERT_COOLDOWN_SEC: int = int(os.getenv('ALERT_COOLDOWN_SEC', 300))
-    CANDLE_BUFFER_SIZE: int = int(os.getenv('CANDLE_BUFFER_SIZE', 50))
+    CANDLE_BUFFER_SIZE: int = int(os.getenv('CANDLE_BUFFER_SIZE', 500))
 
     # --- Symbols ---
     _DEFAULT_SYMBOLS = 'FPT,VCB,HPG,VNM,MWG'

@@ -8,10 +8,10 @@ symbol trong khoảng thời gian ngắn (cooldown key = symbol).
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from ..models import Alert
-from ..candle_buffer import CandleBuffer
+if TYPE_CHECKING:
+    from ..models import Alert
 
 ICT = timezone(timedelta(hours=7))
 
@@ -32,8 +32,11 @@ class BaseAlertRule(ABC):
         symbol: str,
         price: float,
         ts: datetime,
-        buffer: CandleBuffer,
-    ) -> Optional[Alert]:
+        rsi: Optional[float] = None,
+        volume_ratio: Optional[float] = None,
+        vwap: Optional[float] = None,
+        sigma: Optional[float] = None,
+    ) -> Optional['Alert']:
         ...
 
     def _can_fire(self, symbol: str, alert_type: str, ts: datetime) -> bool:

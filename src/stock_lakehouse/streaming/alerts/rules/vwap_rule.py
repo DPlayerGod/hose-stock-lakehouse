@@ -9,8 +9,6 @@ from datetime import datetime
 from typing import Optional
 
 from ..models import Alert
-from ..candle_buffer import CandleBuffer
-from ..vwap import VWAPCalculator
 from .base import BaseAlertRule
 
 logger = logging.getLogger('alerts.rules.vwap')
@@ -21,28 +19,29 @@ class VWAPRule(BaseAlertRule):
 
     RULE_NAME = "VWAP"
 
-    def __init__(self, config, vwap_calc: VWAPCalculator):
+    def __init__(self, config):
         cooldown = getattr(config, 'ALERT_COOLDOWN_SEC', 300)
         super().__init__(config, cooldown_sec=cooldown)
-        self.calc = vwap_calc
 
     def evaluate(
         self,
         symbol: str,
         price: float,
         ts: datetime,
-        buffer: CandleBuffer,
+        rsi: Optional[float] = None,
+        volume_ratio: Optional[float] = None,
+        vwap: Optional[float] = None,
+        sigma: Optional[float] = None,
     ) -> Optional[Alert]:
-        s_vwap, s_sigma = self.calc.get_session_vwap_and_sigma(symbol, ts)
-        if not s_vwap or s_vwap <= 0:
+        if not vwap or vwap <= 0:
             return None
 
-        deviation_pct = (price - s_vwap) / s_vwap * 100
+        deviation_pct = (price - vwap) / vwap * 100
 
         mode = getattr(self.config, 'ALERT_BAND_MODE', 'sigma')
         if mode == 'pct':
-            return self._check_pct(symbol, price, s_vwap, deviation_pct, ts)
-        return self._check_sigma(symbol, price, s_vwap, s_sigma, deviation_pct, ts)
+            return self._check_pct(symbol, price, vwap, deviation_pct, ts)
+        return self._check_sigma(symbol, price, vwap, sigma, deviation_pct, ts)
 
     def _check_pct(
         self, symbol: str, price: float, vwap: float,

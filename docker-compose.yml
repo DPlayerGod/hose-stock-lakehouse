@@ -90,7 +90,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.3-alpine
     container_name: clickhouse
-    profiles: ["pipeline", "streaming"]
+    profiles: ["pipeline", "streaming", "replay"]
     mem_limit: 2g
     restart: unless-stopped
     ports:
@@ -241,7 +241,7 @@ services:
       context: .
       dockerfile: streamlit_app/Dockerfile
     container_name: streamlit
-    profiles: ["pipeline", "streaming"]
+    profiles: ["pipeline", "streaming", "replay"]
     restart: unless-stopped
     depends_on:
       clickhouse:
@@ -330,11 +330,46 @@ services:
       context: .
       dockerfile: src/stock_lakehouse/streaming/alerts/Dockerfile
     container_name: alert-detector
+    profiles: ["streaming", "replay"]
+    restart: unless-stopped
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    command: ["python", "-m", "stock_lakehouse.streaming.alerts.detector", "--reset-today"]
+    environment:
+      PYTHONPATH: /app/src
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      SLACK_DNSE_WEBHOOK: ${SLACK_DNSE_WEBHOOK:-}
+      ALERT_BAND_MODE: ${ALERT_BAND_MODE:-sigma}
+      ALERT_THRESHOLD_PCT: ${ALERT_THRESHOLD_PCT:-1.5}
+      BAND_SIGMA_MULTIPLIER: ${BAND_SIGMA_MULTIPLIER:-2.0}
+      RSI_PERIOD: ${RSI_PERIOD:-14}
+      RSI_OVERBOUGHT: ${RSI_OVERBOUGHT:-70}
+      RSI_OVERSOLD: ${RSI_OVERSOLD:-30}
+      VOLUME_LOOKBACK: ${VOLUME_LOOKBACK:-20}
+      VOLUME_SPIKE_RATIO: ${VOLUME_SPIKE_RATIO:-3.0}
+      POLL_INTERVAL_SEC: ${DETECTOR_POLL_INTERVAL_SEC:-10}
+      ALERT_COOLDOWN_SEC: ${ALERT_COOLDOWN_SEC:-300}
+      CANDLE_BUFFER_SIZE: ${CANDLE_BUFFER_SIZE:-50}
+      ALERT_SYMBOLS: ${ALERT_SYMBOLS:-FPT,VCB,HPG,VNM,MWG}
+    networks:
+      - lakehouse_net
+
+  alert-detector-live:
+    build:
+      context: .
+      dockerfile: src/stock_lakehouse/streaming/alerts/Dockerfile
+    container_name: alert-detector-live
     profiles: ["streaming"]
     restart: unless-stopped
     depends_on:
       clickhouse:
         condition: service_healthy
+    command: ["python", "-m", "stock_lakehouse.streaming.alerts.detector"]
     environment:
       PYTHONPATH: /app/src
       CLICKHOUSE_HOST: clickhouse

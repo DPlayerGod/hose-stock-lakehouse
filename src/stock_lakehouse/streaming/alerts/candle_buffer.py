@@ -33,11 +33,14 @@ class CandleBuffer:
 
         Nếu nến cuối cùng trong buffer có cùng candle_time → ghi đè
         (intra-candle update). Nếu khác → append nến mới.
+        Nếu nến mới thuộc ngày khác → clear buffer trước (qua ngày mới).
         """
         if symbol not in self._buffers:
             self._buffers[symbol] = deque(maxlen=self._maxlen)
 
         buf = self._buffers[symbol]
+        if buf and buf[-1].ts.date() != candle.ts.date():
+            buf.clear()
         if buf and buf[-1].ts == candle.ts:
             buf[-1] = candle
         else:

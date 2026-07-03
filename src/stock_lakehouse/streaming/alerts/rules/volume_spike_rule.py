@@ -10,8 +10,6 @@ from datetime import datetime
 from typing import Optional
 
 from ..models import Alert
-from ..candle_buffer import CandleBuffer
-from ..indicators.volume import compute_volume_ratio
 from .base import BaseAlertRule
 
 logger = logging.getLogger('alerts.rules.volume_spike')
@@ -25,7 +23,6 @@ class VolumeSpikeRule(BaseAlertRule):
     def __init__(self, config):
         cooldown = getattr(config, 'ALERT_COOLDOWN_SEC', 300)
         super().__init__(config, cooldown_sec=cooldown)
-        self.lookback = int(getattr(config, 'VOLUME_LOOKBACK', 20))
         self.spike_ratio = float(getattr(config, 'VOLUME_SPIKE_RATIO', 3.0))
 
     def evaluate(
@@ -33,18 +30,19 @@ class VolumeSpikeRule(BaseAlertRule):
         symbol: str,
         price: float,
         ts: datetime,
-        buffer: CandleBuffer,
+        rsi: Optional[float] = None,
+        volume_ratio: Optional[float] = None,
+        vwap: Optional[float] = None,
+        sigma: Optional[float] = None,
     ) -> Optional[Alert]:
-        volumes = buffer.get_volumes(symbol, n=self.lookback + 1)
-        ratio = compute_volume_ratio(volumes, lookback=self.lookback)
-        if ratio is None:
+        if volume_ratio is None:
             return None
 
-        if ratio < self.spike_ratio:
+        if volume_ratio < self.spike_ratio:
             return None
 
         alert_type = 'VOLUME_SPIKE'
-        severity = 'CRITICAL' if ratio >= 5.0 else 'WARNING'
+        severity = 'CRITICAL' if volume_ratio >= 5.0 else 'WARNING'
 
         if not self._can_fire(symbol, alert_type, ts):
             return None
@@ -54,8 +52,8 @@ class VolumeSpikeRule(BaseAlertRule):
             alert_time=ts, symbol=symbol,
             rule_name=self.RULE_NAME, alert_type=alert_type,
             severity=severity, price=price,
-            indicator_value=ratio, threshold=self.spike_ratio,
+            indicator_value=volume_ratio, threshold=self.spike_ratio,
             deviation_pct=0.0,
-            message=f"{symbol} KL đột biến {ratio:.1f}x trung bình"
+            message=f"{symbol} KL đột biến {volume_ratio:.1f}x trung bình"
                     f"{' (cực đoan!)' if severity == 'CRITICAL' else ''}",
         )

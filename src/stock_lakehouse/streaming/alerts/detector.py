@@ -15,6 +15,7 @@ import logging
 import time
 import typing
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 import clickhouse_connect
 
@@ -24,6 +25,8 @@ from .candle_buffer import CandleBuffer, Candle
 from .models import Alert
 from .slack_notifier import SlackNotifier
 from .rules.combined_rule import CombinedSignalRule
+from .indicators.rsi import compute_wilder_rsi
+from .indicators.volume import compute_volume_ratio
 
 ICT = timezone(timedelta(hours=7))
 
@@ -46,12 +49,13 @@ class AlertDetector:
             database=config.CLICKHOUSE_DB,
         )
         self._ensure_rt_hose_alerts()
+        self._ensure_rt_hose_indicators()
 
         self.calc = VWAPCalculator()
         self.buffer = CandleBuffer(maxlen=config.CANDLE_BUFFER_SIZE)
 
         self.rules = [
-            CombinedSignalRule(config, self.calc),
+            CombinedSignalRule(config),
         ]
         rule_names = [r.RULE_NAME for r in self.rules]
         logger.info(f"Registered rules: {rule_names}")
@@ -90,6 +94,36 @@ class AlertDetector:
         except Exception as exc:
             logger.debug(f"rt_hose_alerts creation (ignored): {exc}")
 
+    def _ensure_rt_hose_indicators(self) -> None:
+        """Create rt_hose_indicators table if it does not exist."""
+        try:
+            stmt = """
+            CREATE TABLE IF NOT EXISTS rt_hose_indicators (
+                candle_time   DateTime64(3, 'Asia/Ho_Chi_Minh'),
+                symbol        LowCardinality(String),
+                open          Float64,
+                high          Float64,
+                low           Float64,
+                close         Float64,
+                volume        Int64,
+                vwap          Nullable(Float64),
+                sigma         Nullable(Float64),
+                rsi14         Nullable(Float64),
+                volume_ratio  Nullable(Float64),
+                created_at    DateTime64(3, 'Asia/Ho_Chi_Minh')
+            ) ENGINE = MergeTree()
+            PARTITION BY toYYYYMM(candle_time)
+            ORDER BY (symbol, candle_time)
+            TTL toDate(candle_time) + INTERVAL 90 DAY
+            """
+            if hasattr(self.ch, 'command'):
+                self.ch.command(stmt)
+            else:
+                self.ch.query(stmt)
+            logger.info("rt_hose_indicators table ensured.")
+        except Exception as exc:
+            logger.debug(f"rt_hose_indicators creation (ignored): {exc}")
+
     def _warm_up(self) -> None:
         """Load today's OHLCV candles so VWAP + buffer start with correct state."""
         logger.info("Warming up VWAP + candle buffer with today's OHLCV candles...")
@@ -116,19 +150,17 @@ class AlertDetector:
 
         for row in rows:
             ts, symbol, open_, high, low, close, volume, last_recv = row
-            self.calc.update(
-                symbol=symbol,
-                high=float(high),
-                low=float(low),
-                close=float(close),
-                volume=int(volume),
-                ts=ts,
-            )
-            self.buffer.push(symbol, Candle(
-                ts=ts, open=float(open_), high=float(high),
-                low=float(low), close=float(close), volume=int(volume),
-            ))
+            o, h, l, c, v = float(open_), float(high), float(low), float(close), int(volume)
+            self.calc.update(symbol=symbol, high=h, low=l, close=c, volume=v, ts=ts)
+            self.buffer.push(symbol, Candle(ts=ts, open=o, high=h, low=l, close=c, volume=v))
             self._last_received_at[symbol] = last_recv
+
+            closes = self.buffer.get_closes(symbol, n=None)
+            rsi = compute_wilder_rsi(closes, period=self.config.RSI_PERIOD)
+            volumes = self.buffer.get_volumes(symbol, n=self.config.VOLUME_LOOKBACK + 1)
+            vol_ratio = compute_volume_ratio(volumes, lookback=self.config.VOLUME_LOOKBACK)
+            vwap, sigma = self.calc.get_session_vwap_and_sigma(symbol, ts)
+            self._insert_indicator(symbol, ts, o, h, l, c, v, vwap, sigma, rsi, vol_ratio)
 
         for sym in self.config.SYMBOLS:
             s = sym.strip()
@@ -201,7 +233,7 @@ class AlertDetector:
         open_: float, high: float, low: float,
         close: float, volume: int,
     ) -> None:
-        """Process one candle: update VWAP + buffer + evaluate all rules."""
+        """Process one candle: update VWAP + buffer + compute indicators + evaluate rules."""
         self.calc.update(
             symbol=symbol, high=high, low=low,
             close=close, volume=volume, ts=ts,
@@ -211,9 +243,19 @@ class AlertDetector:
             low=low, close=close, volume=volume,
         ))
 
+        closes = self.buffer.get_closes(symbol, n=None)
+        rsi = compute_wilder_rsi(closes, period=self.config.RSI_PERIOD)
+
+        volumes = self.buffer.get_volumes(symbol, n=self.config.VOLUME_LOOKBACK + 1)
+        vol_ratio = compute_volume_ratio(volumes, lookback=self.config.VOLUME_LOOKBACK)
+
+        vwap, sigma = self.calc.get_session_vwap_and_sigma(symbol, ts)
+
+        self._insert_indicator(symbol, ts, open_, high, low, close, volume, vwap, sigma, rsi, vol_ratio)
+
         for rule in self.rules:
             try:
-                alert = rule.evaluate(symbol, close, ts, self.buffer)
+                alert = rule.evaluate(symbol, close, ts, rsi=rsi, volume_ratio=vol_ratio, vwap=vwap, sigma=sigma)
                 if alert:
                     self._fire_alert(alert)
             except Exception as exc:
@@ -221,6 +263,30 @@ class AlertDetector:
                     f"Rule {rule.RULE_NAME} error for {symbol}: {exc}",
                     exc_info=True,
                 )
+
+    def _insert_indicator(
+        self, symbol: str, ts: datetime,
+        open_: float, high: float, low: float,
+        close: float, volume: int,
+        vwap: Optional[float], sigma: Optional[float],
+        rsi: Optional[float], vol_ratio: Optional[float],
+    ) -> None:
+        """Insert candle + indicators into rt_hose_indicators table."""
+        try:
+            self.ch.insert(
+                'rt_hose_indicators',
+                [[
+                    ts, symbol, open_, high, low, close, volume,
+                    vwap, sigma, rsi, vol_ratio,
+                    datetime.now(ICT),
+                ]],
+                column_names=[
+                    'candle_time', 'symbol', 'open', 'high', 'low', 'close', 'volume',
+                    'vwap', 'sigma', 'rsi14', 'volume_ratio', 'created_at',
+                ],
+            )
+        except Exception as exc:
+            logger.debug(f"Failed to insert indicator (ignored): {exc}")
 
     def run(self) -> None:
         logger.info(
@@ -272,9 +338,61 @@ class AlertDetector:
 
 
 if __name__ == "__main__":
+    import argparse
     import logging
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    AlertDetector(Config()).run()
+
+    parser = argparse.ArgumentParser(description="Alert Detector")
+    parser.add_argument(
+        '--reset-today', action='store_true',
+        help='Delete today\'s indicators + alerts from ClickHouse before starting (for clean replay)'
+    )
+    args = parser.parse_args()
+
+    config = Config()
+
+    if args.reset_today:
+        import logging
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger('detector')
+        client = clickhouse_connect.get_client(
+            host=config.CLICKHOUSE_HOST,
+            port=config.CLICKHOUSE_HTTP_PORT,
+            username=config.CLICKHOUSE_USER,
+            password=config.CLICKHOUSE_PASSWORD,
+            database=config.CLICKHOUSE_DB,
+        )
+        today = datetime.now(ICT).strftime('%Y-%m-%d')
+        logger.info(f"Resetting data for {today}...")
+
+        def _wipe(client, db, table, col, date_str):
+            try:
+                client.command(
+                    f"ALTER TABLE {db}.{table} DELETE WHERE toDate({col}) = '{date_str}'"
+                )
+                logger.info(f"  Wiped {table} for {date_str}")
+            except Exception as e:
+                # Table may not exist yet — this is fine, skip silently
+                if 'UNKNOWN_TABLE' not in str(e):
+                    logger.error(f"  Failed to wipe {table}: {e}")
+                else:
+                    logger.info(f"  {table} not found, skipping wipe")
+
+        _wipe(client, config.CLICKHOUSE_DB, 'rt_hose_indicators', 'candle_time', today)
+        _wipe(client, config.CLICKHOUSE_DB, 'rt_hose_alerts', 'alert_time', today)
+        logger.info(f"Waiting for mutations to complete...")
+        pending = 1
+        while pending > 0:
+            time.sleep(2)
+            result = client.query(
+                f"SELECT count() FROM system.mutations "
+                f"WHERE database = '{config.CLICKHOUSE_DB}' AND is_done = 0"
+            )
+            pending = result.result_rows[0][0] if result.result_rows else 0
+        logger.info(f"Reset complete. Starting detector...")
+
+    AlertDetector(config).run()
