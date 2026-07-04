@@ -59,8 +59,6 @@ def run_daily_index_pipeline(
     # Build Gold index fact — dim_date read from existing table (no dim_symbol)
     dim_date = read_table(catalog.load_table(f"{namespace}.dim_date"))
     fact_day = build_fact_index_daily(core.silver_all, dim_date, processing_date=pd_str)
-    existing_fact = try_read_table(catalog, f"{namespace}.fact_hose_index_daily")
-    fact_all = replace_index_daily(existing_fact, fact_day, pd_str)
     write_dataframe(
         ensure_table(
             catalog,
@@ -68,8 +66,9 @@ def run_daily_index_pipeline(
             FACT_HOSE_INDEX_DAILY_SCHEMA,
             FACT_HOSE_INDEX_DAILY_PARTITION_SPEC,
         ),
-        fact_all,
+        fact_day,
         mode="overwrite",
+        overwrite_filter=f"trading_date = '{pd_str}'",
     )
 
     # Validate gold (day D only)
@@ -79,7 +78,7 @@ def run_daily_index_pipeline(
 
     # Sync fact to ClickHouse
     if sync_clickhouse:
-        sync_index_fact_to_clickhouse(fact_all, processing_date=pd_str, config=config.clickhouse)
+        sync_index_fact_to_clickhouse(fact_day, processing_date=pd_str, config=config.clickhouse)
 
     return DailyIndexResult(
         processing_date=pd_str,

@@ -9,6 +9,7 @@ from pyiceberg.io.pyarrow import schema_to_pyarrow
 from pyiceberg.partitioning import PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.table import Table
+from pyiceberg.expressions import BooleanExpression
 
 
 WriteMode = Literal["append", "overwrite"]
@@ -34,13 +35,21 @@ def ensure_table(
         return catalog.create_table(identifier, schema=schema, partition_spec=partition_spec)
 
 
-def write_dataframe(table: Table, df: pl.DataFrame, mode: WriteMode = "append") -> None:
+def write_dataframe(
+    table: Table,
+    df: pl.DataFrame,
+    mode: WriteMode = "append",
+    overwrite_filter: str | BooleanExpression | None = None,
+) -> None:
     arrow_table = _align_arrow_schema(df.to_arrow(), table)
     if mode == "append":
         table.append(arrow_table)
         return
     if mode == "overwrite":
-        table.overwrite(arrow_table)
+        if overwrite_filter is not None:
+            table.overwrite(arrow_table, overwrite_filter=overwrite_filter)
+        else:
+            table.overwrite(arrow_table)
         return
     raise ValueError(f"Unsupported write mode: {mode}")
 

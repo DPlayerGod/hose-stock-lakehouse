@@ -16,7 +16,7 @@ import polars as pl
 from stock_lakehouse.bronze.ohlcv import build_bronze_ohlcv
 from stock_lakehouse.config import PipelineConfig
 from stock_lakehouse.iceberg.catalog import load_lakehouse_catalog
-from stock_lakehouse.iceberg.reader import try_read_table
+from stock_lakehouse.iceberg.reader import try_read_table, read_table
 from stock_lakehouse.iceberg.tables import (
     BRONZE_OHLCV_PARTITION_SPEC,
     BRONZE_OHLCV_SCHEMA,
@@ -85,36 +85,28 @@ def run_ohlcv_to_silver(
 
     # 3. Bronze
     bronze_day = build_bronze_ohlcv(raw)
-    bronze_all = _replace_by_date(
-        try_read_table(catalog, f"{namespace}.{bronze_table}"),
-        bronze_day,
-        date_column="time",
-        processing_date=pd_str,
-    )
     write_dataframe(
         ensure_table(catalog, f"{namespace}.{bronze_table}", BRONZE_OHLCV_SCHEMA, BRONZE_OHLCV_PARTITION_SPEC),
-        bronze_all,
+        bronze_day,
         mode="overwrite",
+        overwrite_filter=f"time = '{pd_str}'",
     )
 
     # 4. Silver
     silver_day = build_silver_ohlcv(bronze_day, processing_date=pd_str)
-    silver_all = _replace_by_date(
-        try_read_table(catalog, f"{namespace}.{silver_table}"),
-        silver_day,
-        date_column="trading_date",
-        processing_date=pd_str,
-    )
     write_dataframe(
         ensure_table(catalog, f"{namespace}.{silver_table}", SILVER_OHLCV_SCHEMA, SILVER_OHLCV_PARTITION_SPEC),
-        silver_all,
+        silver_day,
         mode="overwrite",
+        overwrite_filter=f"trading_date = '{pd_str}'",
     )
 
     # 5. Validate silver (day D only)
     validate_silver_ohlcv(silver_day, processing_date=pd_str).quarantine_and_raise(
         silver_day, domain=f"silver_{staging_domain}", processing_date=pd_str, batch_id=request.batch_id, config=config.minio
     )
+
+    silver_all = read_table(catalog.load_table(f"{namespace}.{silver_table}"))
 
     return OhlcvSilverResult(
         catalog=catalog,

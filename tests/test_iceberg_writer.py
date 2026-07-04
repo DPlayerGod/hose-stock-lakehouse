@@ -145,6 +145,17 @@ class TestWriteDataframe:
         mock_table.overwrite.assert_called_once()
         mock_table.append.assert_not_called()
 
+    def test_overwrite_mode_with_filter(self, mock_table: MagicMock) -> None:
+        df = _sample_df()
+        filter_expr = "symbol = 'FPT'"
+
+        write_dataframe(mock_table, df, mode="overwrite", overwrite_filter=filter_expr)
+
+        mock_table.overwrite.assert_called_once()
+        kwargs = mock_table.overwrite.call_args[1]
+        assert kwargs.get("overwrite_filter") == filter_expr
+        mock_table.append.assert_not_called()
+
     def test_default_mode_is_append(self, mock_table: MagicMock) -> None:
         df = _sample_df()
 
@@ -244,6 +255,21 @@ class TestIcebergWriterIntegration:
         result = _scan_to_dataframe(table)
         assert result.height == 1
         assert result.get_column("symbol").to_list() == ["VNM"]
+
+    def test_overwrite_with_filter(self, catalog, test_table_id: str) -> None:
+        """Test that overwrite with a filter preserves data outside of the filter."""
+        table = ensure_table(catalog, test_table_id, SIMPLE_SCHEMA)
+
+        df1 = pl.DataFrame({"symbol": ["FPT", "VNM"], "value": [100, 200]})
+        df2 = pl.DataFrame({"symbol": ["FPT"], "value": [999]})
+
+        write_dataframe(table, df1, mode="append")
+        write_dataframe(table, df2, mode="overwrite", overwrite_filter="symbol = 'FPT'")
+
+        result = _scan_to_dataframe(table)
+        assert result.height == 2
+        assert result.filter(pl.col("symbol") == "FPT").get_column("value").item() == 999
+        assert result.filter(pl.col("symbol") == "VNM").get_column("value").item() == 200
 
     def test_ohlcv_schema_write(self, catalog) -> None:
         """Test with the real BRONZE_OHLCV_SCHEMA from tables.py."""

@@ -34,21 +34,41 @@ def _anchor_session_ts(offset_minutes: int = 60) -> datetime:
 
 
 class MockClickHouse:
-    """Mock ClickHouse client tra ve OHLCV data gia."""
+    """Mock ClickHouse client tra ve OHLCV data gia.
+
+    Routing theo SQL pattern:
+      * `FROM system.tables` → tra ve 3 rows ten table (giong schema that).
+      * `FROM rt_hose_ohlcv_1m` → tra ve OHLCV rows tu `self._candles`.
+
+    Tat ca query khac tra ve empty result set de tranh leak data qua nham.
+    """
+
+    _SYSTEM_TABLES = ['rt_hose_ohlcv_1m', 'rt_hose_indicators', 'rt_hose_alerts']
 
     def __init__(self, candles: list):
         self._candles = candles
         self.inserted_rows = []
+        self.inserted_tables: list[str] = []
 
-    def query(self, query: str):
+    def _result(self, rows: list):
         mock = MagicMock()
-        mock.result_rows = self._candles
+        mock.result_rows = rows
         return mock
+
+    def query(self, query: str, parameters: dict | None = None):
+        q = query.lstrip().lower()
+        if q.startswith('select name from system.tables'):
+            return self._result([(t,) for t in self._SYSTEM_TABLES])
+        if 'from rt_hose_ohlcv_1m' in q:
+            return self._result(self._candles)
+        # Default: empty result set (system.mutations, etc.)
+        return self._result([])
 
     def command(self, stmt: str):
         pass
 
     def insert(self, table: str, rows: list, column_names: list):
+        self.inserted_tables.append(table)
         self.inserted_rows.extend(rows)
 
 

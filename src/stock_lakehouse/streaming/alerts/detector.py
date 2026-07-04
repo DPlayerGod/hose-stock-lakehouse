@@ -169,7 +169,7 @@ class AlertDetector:
         ).result_rows
 
     def _fire_alert(self, alert: Alert) -> None:
-        """Write alert to ClickHouse alerts_v2 + send to Slack."""
+        """Write alert to ClickHouse rt_hose_alerts + send to Slack."""
         logger.warning(
             f"[{alert.rule_name}] {alert.alert_type} | {alert.symbol} "
             f"price={alert.price:.2f} indicator={alert.indicator_value:.2f} "

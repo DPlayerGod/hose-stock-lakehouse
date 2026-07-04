@@ -137,12 +137,10 @@ with DAG(
         """Build Bronze OHLCV and write to Iceberg."""
         from stock_lakehouse.bronze.ohlcv import build_bronze_ohlcv
         from stock_lakehouse.iceberg.catalog import load_lakehouse_catalog
-        from stock_lakehouse.iceberg.reader import try_read_table
         from stock_lakehouse.iceberg.tables import BRONZE_OHLCV_SCHEMA, BRONZE_OHLCV_PARTITION_SPEC
         from stock_lakehouse.iceberg.writer import ensure_table, write_dataframe
         from stock_lakehouse.staging.writer import read_staging_parquet
         from stock_lakehouse.utils.dates import format_date
-        from stock_lakehouse.pipelines.ohlcv_core import _replace_by_date
 
         config = _get_config()
         staging_uri = metadata["staging_uri"]
@@ -154,13 +152,11 @@ with DAG(
         catalog = load_lakehouse_catalog(config.iceberg)
         ns = config.iceberg.namespace
 
-        existing = try_read_table(catalog, f"{ns}.bronze_hose_ohlcv_daily")
-        bronze_all = _replace_by_date(existing, bronze_day, date_column="time", processing_date=format_date(processing_date))
-
         write_dataframe(
             ensure_table(catalog, f"{ns}.bronze_hose_ohlcv_daily", BRONZE_OHLCV_SCHEMA, BRONZE_OHLCV_PARTITION_SPEC),
-            bronze_all,
+            bronze_day,
             mode="overwrite",
+            overwrite_filter=f"time = '{format_date(processing_date)}'",
         )
         return {**metadata, "bronze_rows": bronze_day.height}
 
@@ -169,13 +165,11 @@ with DAG(
         """Transform Bronze to Silver and write to Iceberg."""
         from stock_lakehouse.bronze.ohlcv import build_bronze_ohlcv
         from stock_lakehouse.iceberg.catalog import load_lakehouse_catalog
-        from stock_lakehouse.iceberg.reader import try_read_table
         from stock_lakehouse.iceberg.tables import SILVER_OHLCV_SCHEMA, SILVER_OHLCV_PARTITION_SPEC
         from stock_lakehouse.iceberg.writer import ensure_table, write_dataframe
         from stock_lakehouse.silver.ohlcv import build_silver_ohlcv
         from stock_lakehouse.staging.writer import read_staging_parquet
         from stock_lakehouse.utils.dates import format_date
-        from stock_lakehouse.pipelines.ohlcv_core import _replace_by_date
 
         config = _get_config()
         staging_uri = metadata["staging_uri"]
@@ -188,13 +182,11 @@ with DAG(
         catalog = load_lakehouse_catalog(config.iceberg)
         ns = config.iceberg.namespace
 
-        existing = try_read_table(catalog, f"{ns}.silver_hose_ohlcv_daily")
-        silver_all = _replace_by_date(existing, silver_day, date_column="trading_date", processing_date=format_date(processing_date))
-
         write_dataframe(
             ensure_table(catalog, f"{ns}.silver_hose_ohlcv_daily", SILVER_OHLCV_SCHEMA, SILVER_OHLCV_PARTITION_SPEC),
-            silver_all,
+            silver_day,
             mode="overwrite",
+            overwrite_filter=f"trading_date = '{format_date(processing_date)}'",
         )
         return {**metadata, "silver_rows": silver_day.height}
 
@@ -230,9 +222,9 @@ with DAG(
     @task
     def build_gold_fact(metadata: dict):
         """Build fact_hose_daily_market and write to Iceberg."""
-        from stock_lakehouse.gold.fact_daily_market import build_fact_daily_market, replace_daily_market
+        from stock_lakehouse.gold.fact_daily_market import build_fact_daily_market
         from stock_lakehouse.iceberg.catalog import load_lakehouse_catalog
-        from stock_lakehouse.iceberg.reader import try_read_table, read_table
+        from stock_lakehouse.iceberg.reader import read_table
         from stock_lakehouse.iceberg.tables import (
             FACT_HOSE_DAILY_MARKET_SCHEMA,
             FACT_HOSE_DAILY_MARKET_PARTITION_SPEC,
@@ -252,13 +244,11 @@ with DAG(
 
         fact_day = build_fact_daily_market(silver_all, dim_symbol, dim_date, processing_date=format_date(processing_date))
 
-        existing_fact = try_read_table(catalog, f"{ns}.fact_hose_daily_market")
-        fact_all = replace_daily_market(existing_fact, fact_day, format_date(processing_date))
-
         write_dataframe(
             ensure_table(catalog, f"{ns}.fact_hose_daily_market", FACT_HOSE_DAILY_MARKET_SCHEMA, FACT_HOSE_DAILY_MARKET_PARTITION_SPEC),
-            fact_all,
+            fact_day,
             mode="overwrite",
+            overwrite_filter=f"trading_date = '{format_date(processing_date)}'",
         )
         return {**metadata, "fact_rows": fact_day.height}
 

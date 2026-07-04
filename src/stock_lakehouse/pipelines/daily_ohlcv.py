@@ -63,8 +63,6 @@ def run_daily_ohlcv_pipeline(
     dim_symbol = read_table(catalog.load_table(f"{namespace}.dim_symbol"))
     dim_date = read_table(catalog.load_table(f"{namespace}.dim_date"))
     fact_day = build_fact_daily_market(core.silver_all, dim_symbol, dim_date, processing_date=pd_str)
-    existing_fact = try_read_table(catalog, f"{namespace}.fact_hose_daily_market")
-    fact_all = replace_daily_market(existing_fact, fact_day, pd_str)
     write_dataframe(
         ensure_table(
             catalog,
@@ -72,8 +70,9 @@ def run_daily_ohlcv_pipeline(
             FACT_HOSE_DAILY_MARKET_SCHEMA,
             FACT_HOSE_DAILY_MARKET_PARTITION_SPEC,
         ),
-        fact_all,
+        fact_day,
         mode="overwrite",
+        overwrite_filter=f"trading_date = '{pd_str}'",
     )
 
     # Validate gold (day D only)
@@ -83,7 +82,7 @@ def run_daily_ohlcv_pipeline(
 
     # Sync fact to ClickHouse
     if sync_clickhouse:
-        sync_fact_to_clickhouse(fact_all, processing_date=pd_str, config=config.clickhouse)
+        sync_fact_to_clickhouse(fact_day, processing_date=pd_str, config=config.clickhouse)
 
     return DailyPipelineResult(
         processing_date=pd_str,
