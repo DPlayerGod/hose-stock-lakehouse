@@ -325,6 +325,31 @@ services:
     networks:
       - lakehouse_net
 
+  streaming-init:
+    build:
+      context: .
+      dockerfile: streamlit_app/Dockerfile
+    container_name: streaming-init
+    profiles: ["streaming", "replay"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - ./src:/app/src
+    command: ["python", "-m", "stock_lakehouse.streaming.clickhouse.init"]
+    environment:
+      PYTHONPATH: /app/src
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_OHLC: dnse.ohlc
+    networks:
+      - lakehouse_net
+
   alert-detector:
     build:
       context: .
@@ -335,6 +360,8 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+      streaming-init:
+        condition: service_completed_successfully
     command: ["python", "-m", "stock_lakehouse.streaming.alerts.detector", "--reset-today"]
     environment:
       PYTHONPATH: /app/src
@@ -369,6 +396,8 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+      streaming-init:
+        condition: service_completed_successfully
     command: ["python", "-m", "stock_lakehouse.streaming.alerts.detector"]
     environment:
       PYTHONPATH: /app/src

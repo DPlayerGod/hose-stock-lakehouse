@@ -49,8 +49,7 @@ class AlertDetector:
             password=config.CLICKHOUSE_PASSWORD,
             database=config.CLICKHOUSE_DB,
         )
-        self._ensure_rt_hose_alerts()
-        self._ensure_rt_hose_indicators()
+        self._verify_streaming_schema()
 
         self.calc = VWAPCalculator()
         self.buffer = CandleBuffer(maxlen=config.CANDLE_BUFFER_SIZE)
@@ -68,62 +67,29 @@ class AlertDetector:
         self._warm_up()
         self._warmup_done = True
 
-    def _ensure_rt_hose_alerts(self) -> None:
-        """Create rt_hose_alerts table if it does not exist."""
-        try:
-            stmt = """
-            CREATE TABLE IF NOT EXISTS rt_hose_alerts (
-                alert_time      DateTime64(3, 'Asia/Ho_Chi_Minh'),
-                symbol          LowCardinality(String),
-                rule_name       LowCardinality(String),
-                alert_type      String,
-                severity        LowCardinality(String),
-                price           Float64,
-                indicator_value Float64,
-                threshold       Float64,
-                deviation_pct   Float64,
-                message         String
-            ) ENGINE = MergeTree()
-            ORDER BY (alert_time, symbol, rule_name)
-            TTL toDate(alert_time) + INTERVAL 90 DAY
-            """
-            if hasattr(self.ch, 'command'):
-                self.ch.command(stmt)
-            else:
-                self.ch.query(stmt)
-            logger.info("rt_hose_alerts table ensured.")
-        except Exception as exc:
-            logger.debug(f"rt_hose_alerts creation (ignored): {exc}")
+    def _verify_streaming_schema(self) -> None:
+        """Fail-fast check: streaming tables must already exist.
 
-    def _ensure_rt_hose_indicators(self) -> None:
-        """Create rt_hose_indicators table if it does not exist."""
-        try:
-            stmt = """
-            CREATE TABLE IF NOT EXISTS rt_hose_indicators (
-                candle_time   DateTime64(3, 'Asia/Ho_Chi_Minh'),
-                symbol        LowCardinality(String),
-                open          Float64,
-                high          Float64,
-                low           Float64,
-                close         Float64,
-                volume        Int64,
-                vwap          Nullable(Float64),
-                sigma         Nullable(Float64),
-                rsi14         Nullable(Float64),
-                volume_ratio  Nullable(Float64),
-                created_at    DateTime64(3, 'Asia/Ho_Chi_Minh')
-            ) ENGINE = MergeTree()
-            PARTITION BY toYYYYMM(candle_time)
-            ORDER BY (symbol, candle_time)
-            TTL toDate(candle_time) + INTERVAL 90 DAY
-            """
-            if hasattr(self.ch, 'command'):
-                self.ch.command(stmt)
-            else:
-                self.ch.query(stmt)
-            logger.info("rt_hose_indicators table ensured.")
-        except Exception as exc:
-            logger.debug(f"rt_hose_indicators creation (ignored): {exc}")
+        DDL is owned by `streaming/clickhouse/init_streaming.sql` and must
+        have been applied via `python -m stock_lakehouse.streaming.clickhouse.init`
+        before this detector starts. We deliberately do NOT create tables here —
+        keeping schema ownership in one place avoids drift between code and SQL.
+        """
+        required = ('rt_hose_ohlcv_1m', 'rt_hose_indicators', 'rt_hose_alerts')
+        rows = self.ch.query(
+            "SELECT name FROM system.tables "
+            "WHERE database = %(db)s AND name IN %(names)s",
+            parameters={'db': self.config.CLICKHOUSE_DB, 'names': required},
+        ).result_rows
+        present = {r[0] for r in rows}
+        missing = [t for t in required if t not in present]
+        if missing:
+            raise RuntimeError(
+                f"Streaming schema not initialised — missing tables: {missing}. "
+                f"Run `python -m stock_lakehouse.streaming.clickhouse.init` first "
+                f"(or start the `streaming-init` service in docker-compose)."
+            )
+        logger.info("Streaming schema verified: %s", sorted(present))
 
     def _warm_up(self) -> None:
         """Load target date's OHLCV candles so VWAP + buffer start with correct state."""

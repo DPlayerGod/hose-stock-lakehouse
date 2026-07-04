@@ -3,13 +3,20 @@
 -- Idempotent: all tables use CREATE TABLE IF NOT EXISTS
 -- Run via streaming/clickhouse/init.py or manually in ClickHouse
 -- All tables live in database 'lakehouse'
+--
+-- Single-source-of-truth note (2026-07-04 cleanup):
+--   * VWAP + σ are computed ONLY in Python (alerts/vwap.py) and
+--     written by detector.py into rt_hose_indicators.
+--   * rt_hose_intraday_vwap + realtime_hose_stock_signal +
+--     rt_hose_latest_price have been removed (no MV populator,
+--     no Python consumer — redundant with rt_hose_indicators).
 -- =============================================================
 
 SET allow_experimental_lightweight_delete = 1;
 
 -- ---------------------------------------------------------------
 -- 1. rt_hose_ohlcv_1m — OHLCV 1-minute candles from Kafka
---    Source: MV from kafka_ohlc
+--    Source: MV from kafka_ohlc (Section 2-3)
 -- ---------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS lakehouse.rt_hose_ohlcv_1m
 (
@@ -78,88 +85,53 @@ SELECT
 FROM lakehouse.kafka_ohlc;
 
 -- ---------------------------------------------------------------
--- 4. rt_hose_latest_price — Latest price per symbol (upsert)
---    Source: MV from rt_hose_ohlcv_1m using argMax
+-- 4. rt_hose_indicators — Single source of truth for streaming
+--    indicators. Populated by detector.py (_insert_indicator)
+--    ONCE per candle: VWAP, σ (Wilder's session VWAP) + RSI14 +
+--    volume_ratio. Dashboard + Alert Rules read from here.
+--    DDL is owned by this schema file (not the application).
+--    detector.py verifies the table exists at startup and fails
+--    fast if init.py has not been run yet.
 -- ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS lakehouse.rt_hose_latest_price
+CREATE TABLE IF NOT EXISTS lakehouse.rt_hose_indicators
 (
-    symbol           LowCardinality(String),
-    latest_price     Float64,
-    latest_quantity  Int64,
-    last_trade_time  DateTime64(3, 'Asia/Ho_Chi_Minh')
-)
-ENGINE = ReplacingMergeTree(last_trade_time)
-ORDER BY (symbol);
+    candle_time   DateTime64(3, 'Asia/Ho_Chi_Minh'),
+    symbol        LowCardinality(String),
+    open          Float64,
+    high          Float64,
+    low           Float64,
+    close         Float64,
+    volume        Int64,
+    vwap          Nullable(Float64),
+    sigma         Nullable(Float64),
+    rsi14         Nullable(Float64),
+    volume_ratio  Nullable(Float64),
+    created_at    DateTime64(3, 'Asia/Ho_Chi_Minh')
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(candle_time)
+ORDER BY (symbol, candle_time)
+TTL toDate(candle_time) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192;
 
 -- ---------------------------------------------------------------
--- 5. Materialized View: rt_hose_ohlcv_1m → rt_hose_latest_price
--- ---------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS lakehouse.mv_rt_latest_price
-TO lakehouse.rt_hose_latest_price
-AS
-SELECT
-    symbol,
-    close            AS latest_price,
-    volume           AS latest_quantity,
-    candle_time      AS last_trade_time
-FROM lakehouse.rt_hose_ohlcv_1m;
-
--- ---------------------------------------------------------------
--- 6. rt_hose_intraday_vwap — Session VWAP accumulator
---    Formula: VWAP = Σ(tp × vol) / Σ(vol),  tp = (H+L+C)/3
--- ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS lakehouse.rt_hose_intraday_vwap
-(
-    symbol       LowCardinality(String),
-    trading_date Date,
-    sum_pv       AggregateFunction(sum, Float64),   -- Σ(tp × vol)
-    sum_vol      AggregateFunction(sum, Int64)       -- Σ(vol)
-)
-ENGINE = AggregatingMergeTree()
-ORDER BY (symbol, trading_date)
-TTL trading_date + INTERVAL 30 DAY;
-
--- ---------------------------------------------------------------
--- 7. Materialized View: rt_hose_ohlcv_1m → rt_hose_intraday_vwap
---    typical_price = (high + low + close) / 3
--- ---------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS lakehouse.mv_rt_intraday_vwap
-TO lakehouse.rt_hose_intraday_vwap
-AS
-SELECT
-    symbol,
-    toDate(candle_time)                        AS trading_date,
-    sumState((high + low + close) / 3 * volume) AS sum_pv,
-    sumState(volume)                            AS sum_vol
-FROM lakehouse.rt_hose_ohlcv_1m
-GROUP BY symbol, trading_date;
-
--- ---------------------------------------------------------------
--- 8. realtime_hose_stock_signal — Batch indicators + streaming price
---    NOTE: This table requires a corresponding MV (mv_rt_stock_signal) to be populated.
---    The MV is not yet implemented — signals are computed on-the-fly in Streamlit via
---    signal_snapshot_from_candles() instead of querying this table.
---    To populate: create a MV that upserts per-symbol signal rows from rt_hose_ohlcv_1m.
---    Deduplication: ReplacingMergeTree keeps latest signal per symbol
--- ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS lakehouse.realtime_hose_stock_signal
-(
-    symbol         LowCardinality(String),
-    latest_price   Float64,
-    vwap           Float64,
-    sma20          Float64,
-    ema20          Float64,
-    rsi14          Float64,
-    signal_type    String,   -- BULLISH / BEARISH / NEUTRAL
-    created_at     DateTime64(3, 'Asia/Ho_Chi_Minh')
-)
-ENGINE = ReplacingMergeTree(created_at)
-ORDER BY (symbol)
-TTL toDate(created_at) + INTERVAL 30 DAY;
-
--- ---------------------------------------------------------------
--- 9. rt_hose_alerts — Alert history from Python Alert Detector
---    Created dynamically by detector.py _ensure_rt_hose_alerts()
+-- 5. rt_hose_alerts — Alert history from Python Alert Detector
 --    ORDER BY (alert_time, symbol, rule_name) enables efficient dedup
 --    TTL: 90 days
+--    DDL is owned by this schema file (not the application).
 -- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS lakehouse.rt_hose_alerts
+(
+    alert_time      DateTime64(3, 'Asia/Ho_Chi_Minh'),
+    symbol          LowCardinality(String),
+    rule_name       LowCardinality(String),
+    alert_type      String,
+    severity        LowCardinality(String),
+    price           Float64,
+    indicator_value Float64,
+    threshold       Float64,
+    deviation_pct   Float64,
+    message         String
+) ENGINE = MergeTree()
+ORDER BY (alert_time, symbol, rule_name)
+TTL toDate(alert_time) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192;

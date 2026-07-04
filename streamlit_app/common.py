@@ -306,18 +306,6 @@ def load_realtime_candles(symbol: str = "", minutes: int = 180, trading_day: dat
 
 
 @st.cache_data(ttl=30)
-def load_intraday_vwap() -> pd.DataFrame:
-    return query_df(
-        """
-        SELECT symbol, sumMerge(sum_pv) / nullIf(sumMerge(sum_vol), 0) AS vwap
-        FROM rt_hose_intraday_vwap
-        WHERE trading_date = toDate(now('Asia/Ho_Chi_Minh'))
-        GROUP BY symbol
-        """
-    )
-
-
-@st.cache_data(ttl=30)
 def load_realtime_alerts(symbol: str | None = None, limit: int = 50) -> pd.DataFrame:
     symbol_filter = f"AND symbol = '{symbol}'" if symbol else ""
     return query_df(
@@ -605,18 +593,16 @@ def _base_layout(fig: go.Figure, height: int, margin: dict | None = None) -> go.
     return fig
 
 
-def realtime_candle_figure(sym_candles: pd.DataFrame, sym_vwap: float | None) -> go.Figure:
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(
-        x=sym_candles["candle_time"], open=sym_candles["open"], high=sym_candles["high"],
-        low=sym_candles["low"], close=sym_candles["close"], name="Price",
-        increasing=dict(line=dict(color=UP_COLOR), fillcolor=UP_COLOR),
-        decreasing=dict(line=dict(color=DOWN_COLOR), fillcolor=DOWN_COLOR), showlegend=False,
-    ))
-    if sym_vwap and sym_vwap > 0:
-        fig.add_trace(go.Scatter(x=sym_candles["candle_time"], y=[sym_vwap] * len(sym_candles), name="VWAP", line=dict(color=EMA_COLOR, width=1.5, dash="dash")))
-    fig.update_layout(xaxis_rangeslider_visible=False)
-    return _base_layout(fig, 420, dict(l=10, r=10, t=10, b=10))
+def realtime_candle_figure(*_args, **_kwargs):
+    """Removed in v2 (2026-07): superseded by `build_multi_chart()` which renders
+    VWAP + σ bands directly from the `rt_hose_indicators` columns.
+    Kept as a stub for one release to avoid hard import errors in any external
+    script; raise if invoked.
+    """
+    raise NotImplementedError(
+        "realtime_candle_figure() was removed — VWAP + σ are now read from "
+        "rt_hose_indicators. Use build_multi_chart() instead."
+    )
 
 
 def realtime_signal_figure(df: pd.DataFrame, symbol: str) -> go.Figure:
