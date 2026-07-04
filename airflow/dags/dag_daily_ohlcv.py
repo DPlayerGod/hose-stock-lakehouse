@@ -59,7 +59,7 @@ def _get_symbols():
 def _get_processing_date(data_interval_end=None, logical_date=None):
     """Extract processing date from context."""
     if data_interval_end:
-        return data_interval_end.date().isoformat()
+        return data_interval_end.in_timezone(LOCAL_TZ).date().isoformat()
     return logical_date
 
 
@@ -89,7 +89,7 @@ with DAG(
         from stock_lakehouse.staging.writer import StagingPathBuilder, write_staging_parquet
         from stock_lakehouse.utils.dates import format_date
 
-        ds = data_interval_end.date().isoformat()
+        ds = data_interval_end.in_timezone(LOCAL_TZ).date().isoformat()
         symbols = _get_symbols()
         request = OhlcvExtractRequest.daily(ds, symbols=symbols, source="VCI")
         df = extract_ohlcv(request)

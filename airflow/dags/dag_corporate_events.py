@@ -48,7 +48,7 @@ def _get_symbols():
 def _get_processing_date(data_interval_end=None, logical_date=None):
     """Extract processing date from context."""
     if data_interval_end:
-        return data_interval_end.date().isoformat()
+        return data_interval_end.in_timezone(LOCAL_TZ).date().isoformat()
     return logical_date
 
 
@@ -246,7 +246,7 @@ with DAG(
 ) as dag:
 
     # Get processing date
-    processing_date = "{{ ds }}"
+    processing_date = "{{ logical_date.in_timezone('Asia/Ho_Chi_Minh').strftime('%Y-%m-%d') }}"
 
     # Run pipeline
     batch_info = extract_events(processing_date)

@@ -39,8 +39,9 @@ logger = logging.getLogger('detector')
 
 class AlertDetector:
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, target_date: str | None = None):
         self.config = config
+        self.target_date = target_date or datetime.now(ICT).strftime('%Y-%m-%d')
         self.ch = clickhouse_connect.get_client(
             host=config.CLICKHOUSE_HOST,
             port=config.CLICKHOUSE_HTTP_PORT,
@@ -125,9 +126,9 @@ class AlertDetector:
             logger.debug(f"rt_hose_indicators creation (ignored): {exc}")
 
     def _warm_up(self) -> None:
-        """Load today's OHLCV candles so VWAP + buffer start with correct state."""
-        logger.info("Warming up VWAP + candle buffer with today's OHLCV candles...")
-        today = datetime.now(ICT).strftime('%Y-%m-%d')
+        """Load target date's OHLCV candles so VWAP + buffer start with correct state."""
+        logger.info(f"Warming up VWAP + candle buffer with {self.target_date}'s OHLCV candles...")
+        today = self.target_date
         symbols_sql = ','.join([f"'{s.strip()}'" for s in self.config.SYMBOLS])
 
         rows = self.ch.query(
@@ -174,7 +175,7 @@ class AlertDetector:
     def _fetch_new_ohlc(self, symbol: str):
         """Fetch new candles from ClickHouse since last seen watermark."""
         last_recv = self._last_received_at.get(symbol)
-        today = datetime.now(ICT).strftime('%Y-%m-%d')
+        today = self.target_date
 
         if last_recv:
             recv_str = last_recv.strftime('%Y-%m-%d %H:%M:%S.%f')
@@ -349,13 +350,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Alert Detector")
     parser.add_argument(
         '--reset-today', action='store_true',
-        help='Delete today\'s indicators + alerts from ClickHouse before starting (for clean replay)'
+        help='Delete target date\'s indicators + alerts from ClickHouse before starting (for clean replay)'
+    )
+    parser.add_argument(
+        '--date', type=str, default=None,
+        help='Target date in YYYY-MM-DD format (defaults to today)'
+    )
+    parser.add_argument(
+        '--backfill', action='store_true',
+        help='Run warmup calculation for target date and exit immediately'
     )
     args = parser.parse_args()
 
     config = Config()
+    target_date = args.date or datetime.now(ICT).strftime('%Y-%m-%d')
 
-    if args.reset_today:
+    if args.reset_today or args.backfill:
         import logging
         logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger('detector')
@@ -366,8 +376,7 @@ if __name__ == "__main__":
             password=config.CLICKHOUSE_PASSWORD,
             database=config.CLICKHOUSE_DB,
         )
-        today = datetime.now(ICT).strftime('%Y-%m-%d')
-        logger.info(f"Resetting data for {today}...")
+        logger.info(f"Resetting data for {target_date}...")
 
         def _wipe(client, db, table, col, date_str):
             try:
@@ -382,8 +391,8 @@ if __name__ == "__main__":
                 else:
                     logger.info(f"  {table} not found, skipping wipe")
 
-        _wipe(client, config.CLICKHOUSE_DB, 'rt_hose_indicators', 'candle_time', today)
-        _wipe(client, config.CLICKHOUSE_DB, 'rt_hose_alerts', 'alert_time', today)
+        _wipe(client, config.CLICKHOUSE_DB, 'rt_hose_indicators', 'candle_time', target_date)
+        _wipe(client, config.CLICKHOUSE_DB, 'rt_hose_alerts', 'alert_time', target_date)
         logger.info(f"Waiting for mutations to complete...")
         pending = 1
         while pending > 0:
@@ -395,4 +404,8 @@ if __name__ == "__main__":
             pending = result.result_rows[0][0] if result.result_rows else 0
         logger.info(f"Reset complete. Starting detector...")
 
-    AlertDetector(config).run()
+    detector = AlertDetector(config, target_date=target_date)
+    if args.backfill:
+        logger.info(f"Backfill completed successfully for {target_date}.")
+    else:
+        detector.run()

@@ -102,7 +102,7 @@ with DAG(
 ) as dag:
 
     # Get processing date
-    processing_date = "{{ ds }}"
+    processing_date = "{{ logical_date.in_timezone('Asia/Ho_Chi_Minh').strftime('%Y-%m-%d') }}"
 
     # Run pipeline
     exported = export_to_minio(processing_date)

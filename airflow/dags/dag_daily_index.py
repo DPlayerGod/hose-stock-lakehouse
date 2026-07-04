@@ -85,7 +85,7 @@ with DAG(
         from stock_lakehouse.staging.writer import StagingPathBuilder, write_staging_parquet
         from stock_lakehouse.utils.dates import format_date
 
-        ds = data_interval_end.date().isoformat()
+        ds = data_interval_end.in_timezone(LOCAL_TZ).date().isoformat()
         request = OhlcvExtractRequest.daily(ds, symbols=_get_indices(), source="VCI")
         df = extract_ohlcv(request)
 
