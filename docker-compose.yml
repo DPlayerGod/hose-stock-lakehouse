@@ -355,7 +355,7 @@ services:
       context: .
       dockerfile: src/stock_lakehouse/streaming/alerts/Dockerfile
     container_name: alert-detector
-    profiles: ["streaming", "replay"]
+    profiles: ["replay"]
     restart: unless-stopped
     depends_on:
       clickhouse:
@@ -381,7 +381,7 @@ services:
       VOLUME_SPIKE_RATIO: ${VOLUME_SPIKE_RATIO:-3.0}
       POLL_INTERVAL_SEC: ${DETECTOR_POLL_INTERVAL_SEC:-10}
       ALERT_COOLDOWN_SEC: ${ALERT_COOLDOWN_SEC:-300}
-      CANDLE_BUFFER_SIZE: ${CANDLE_BUFFER_SIZE:-50}
+      CANDLE_BUFFER_SIZE: ${CANDLE_BUFFER_SIZE:-500}
       ALERT_SYMBOLS: ${ALERT_SYMBOLS:-FPT,VCB,HPG,VNM,MWG}
     networks:
       - lakehouse_net
@@ -398,7 +398,6 @@ services:
         condition: service_healthy
       streaming-init:
         condition: service_completed_successfully
-    command: ["python", "-m", "stock_lakehouse.streaming.alerts.detector"]
     environment:
       PYTHONPATH: /app/src
       CLICKHOUSE_HOST: clickhouse
@@ -417,7 +416,7 @@ services:
       VOLUME_SPIKE_RATIO: ${VOLUME_SPIKE_RATIO:-3.0}
       POLL_INTERVAL_SEC: ${DETECTOR_POLL_INTERVAL_SEC:-10}
       ALERT_COOLDOWN_SEC: ${ALERT_COOLDOWN_SEC:-300}
-      CANDLE_BUFFER_SIZE: ${CANDLE_BUFFER_SIZE:-50}
+      CANDLE_BUFFER_SIZE: ${CANDLE_BUFFER_SIZE:-500}
       ALERT_SYMBOLS: ${ALERT_SYMBOLS:-FPT,VCB,HPG,VNM,MWG}
     networks:
       - lakehouse_net

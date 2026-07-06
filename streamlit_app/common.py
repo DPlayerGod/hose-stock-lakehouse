@@ -289,10 +289,22 @@ def load_realtime_candles(symbol: str = "", minutes: int = 180, trading_day: dat
         f"""
         SELECT candle_time, symbol, open, high, low, close, volume, vwap, sigma, rsi14, volume_ratio
         FROM (
-            SELECT candle_time, symbol, open, high, low, close, volume, vwap, sigma, rsi14, volume_ratio
+            SELECT
+                candle_time,
+                symbol,
+                argMax(open, created_at) AS open,
+                argMax(high, created_at) AS high,
+                argMax(low, created_at) AS low,
+                argMax(close, created_at) AS close,
+                argMax(volume, created_at) AS volume,
+                argMax(vwap, created_at) AS vwap,
+                argMax(sigma, created_at) AS sigma,
+                argMax(rsi14, created_at) AS rsi14,
+                argMax(volume_ratio, created_at) AS volume_ratio
             FROM rt_hose_indicators
             WHERE toDate(candle_time, 'Asia/Ho_Chi_Minh') = %(trading_day)s
               {symbol_filter}
+            GROUP BY candle_time, symbol
             ORDER BY candle_time DESC
             LIMIT {limit}
         )
