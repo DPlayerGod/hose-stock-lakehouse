@@ -54,7 +54,7 @@ def ensure_gold_schema(client: Any, database: str = "lakehouse") -> None:
             listed_status String,
             updated_at DateTime64(6, 'UTC')
         )
-        ENGINE = ReplacingMergeTree(updated_at)
+        ENGINE = MergeTree
         ORDER BY symbol_key
         """
     )
@@ -125,7 +125,7 @@ def ensure_gold_schema(client: Any, database: str = "lakehouse") -> None:
             value Nullable(Float64),
             updated_at DateTime64(6, 'UTC')
         )
-        ENGINE = ReplacingMergeTree(updated_at)
+        ENGINE = MergeTree
         ORDER BY (symbol, event_date, event_id)
         """
     )

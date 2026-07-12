@@ -20,3 +20,7 @@ Test_Date
 docs/
 docs/*
 vwap_system/
+
+latex/
+latex_final/
+slide/
